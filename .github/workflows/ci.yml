@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Version d'Airflow alignee sur Astro Runtime 12.x.
+  AIRFLOW_VERSION: "2.10.4"
+
+jobs:
+  lint-test:
+    name: ruff + pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # uv installe via pip : aucune action tierce, aucun credential.
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      # Les appels HTTP sont simules par pytest-httpx : le runner n'atteint
+      # jamais l'API ODRE, et aucun secret n'est necessaire.
+      - name: Tests
+        run: uv run pytest
+
+  dag-import:
+    name: Airflow DAG import
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Airflow and the ingestion package
+        run: |
+          pip install "apache-airflow==${AIRFLOW_VERSION}" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          pip install -e .
+
+      # Attrape les erreurs d'import du DAG sans avoir a demarrer Docker :
+      # c'est la moitie automatisable du critere "astro dev start".
+      - name: Import DAGs
+        env:
+          AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python - <<'PY'
+          from airflow.models import DagBag
+
+          bag = DagBag("airflow/dags", include_examples=False)
+          if bag.import_errors:
+              raise SystemExit(f"erreurs d'import : {bag.import_errors}")
+
+          dag = bag.dags["eco2mix_hourly_ingest"]
+          assert dag.max_active_runs == 1, "un seul run a la fois (writer DuckDB unique)"
+          assert {task.task_id for task in dag.tasks} == {
+              "extract",
+              "load_raw",
+              "dbt_build",
+              "freshness_check",
+          }
+          print(f"OK : {len(bag.dags)} DAG(s), {len(dag.tasks)} taches")
+          PY

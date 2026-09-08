@@ -1,0 +1,21 @@
+# Donnees locales : jamais versionnees (voir data/README.md)
+data/*
+!data/README.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Environnement
+.env
+
+# Astro / Airflow
+airflow/.astro/
+airflow/logs/
+airflow/airflow.db

@@ -1,0 +1,14 @@
+# Monte le code d'ingestion et le stockage local dans les conteneurs Astro.
+# `ingestion/` est en lecture seule : les conteneurs executent le code, ils ne
+# le modifient jamais. `data/` est en lecture-ecriture : c'est la sortie.
+x-eco2mix-volumes: &eco2mix-volumes
+  - ../ingestion:/usr/local/airflow/ingestion:ro
+  - ../data:/usr/local/airflow/data:rw
+
+services:
+  scheduler:
+    volumes: *eco2mix-volumes
+  webserver:
+    volumes: *eco2mix-volumes
+  triggerer:
+    volumes: *eco2mix-volumes

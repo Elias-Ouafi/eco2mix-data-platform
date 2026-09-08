@@ -1,0 +1,10 @@
+# Applique automatiquement par `astro dev start`.
+airflow:
+  connections: []
+  variables: []
+  pools:
+    # DuckDB n'accepte qu'un seul writer sur le fichier : ce pool a 1 slot
+    # serialise toutes les taches qui y touchent, meme entre DAGs differents.
+    - pool_name: duckdb_writer
+      pool_slot: 1
+      pool_description: Acces serialise au fichier DuckDB local

@@ -1,0 +1,3 @@
+perimetre;nature;date;heure;date_heure;consommation;prevision_j1;prevision_j;fioul;charbon;gaz;nucleaire;eolien;solaire;hydraulique;pompage;bioenergies;ech_physiques;taux_co2;ech_comm_angleterre;ech_comm_espagne;ech_comm_italie;ech_comm_suisse;ech_comm_allemagne_belgique
+France;Données temps réel;2026-09-07;05:00;2026-09-07T03:00:00+00:00;42000;41500;41800;120;0;3200;31000;2500;0;4200;-800;900;-3500;28;-1000;-500;-1200;-300;-500
+France;Données temps réel;2026-09-07;05:15;2026-09-07T03:15:00+00:00;41800;41400;41700;118;0;3150;31000;2540;;4180;-760;900;-3480;28;-1000;-480;-1200;-300;-500

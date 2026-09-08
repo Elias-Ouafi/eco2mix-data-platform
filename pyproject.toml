@@ -1,0 +1,45 @@
+[project]
+name = "eco2mix-data-platform"
+version = "0.1.0"
+description = "Ingestion des donnees eCO2mix (RTE) : API ODRE -> Parquet -> DuckDB"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "httpx>=0.27",
+    "tenacity>=8.2",
+    "pyarrow>=16.0",
+    "duckdb>=1.0",
+    # requis par le client Python DuckDB pour rendre les TIMESTAMPTZ
+    "pytz>=2024.1",
+    "pydantic-settings>=2.2",
+    # zoneinfo n'a pas de base de fuseaux sur Windows ni dans les images slim
+    "tzdata>=2024.1",
+]
+
+[project.scripts]
+eco2mix = "ingestion.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-httpx>=0.30",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ingestion"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["ingestion/tests"]
+addopts = "-q --strict-markers"
