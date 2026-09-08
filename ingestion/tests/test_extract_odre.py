@@ -300,6 +300,46 @@ def test_call_count_is_logged_on_close(
     assert "odre_api_calls=1" in caplog.text
 
 
+def test_quota_headers_are_recorded(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+    window: ExtractionWindow,
+    records_payload: dict[str, Any],
+) -> None:
+    """L'API annonce elle-même le quota restant : c'est le chiffre qui fait autorité."""
+    httpx_mock.add_response(
+        json=records_payload,
+        headers={
+            "X-RateLimit-dataset-Remaining": "49999",
+            "X-RateLimit-dataset-Limit": "50000",
+            "X-RateLimit-dataset-Reset": "2026-10-01 00:00:00+00:00",
+        },
+    )
+
+    with OdreClient(settings) as client:
+        client.fetch_records(window)
+
+        assert client.calls.quota_remaining == 49999
+        assert client.calls.quota_limit == 50000
+        assert client.calls.quota_reset == "2026-10-01 00:00:00+00:00"
+
+
+def test_missing_quota_headers_do_not_break_the_run(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+    window: ExtractionWindow,
+    records_payload: dict[str, Any],
+) -> None:
+    """Les en-têtes de quota sont un bonus, jamais une dépendance."""
+    httpx_mock.add_response(json=records_payload, headers={"X-RateLimit-dataset-Remaining": "n/a"})
+
+    with OdreClient(settings) as client:
+        client.fetch_records(window)
+
+        assert client.calls.quota_remaining is None
+        assert client.calls.count == 1
+
+
 def test_suite_never_opens_a_socket(
     httpx_mock: HTTPXMock,
     settings: Settings,

@@ -34,11 +34,20 @@ class ExtractionOutcome:
     window_end: str
 
 
+#: Colonne témoin du contrôle de fraîcheur. RTE publie l'horodatage le plus
+#: récent quelques minutes avant ses mesures : compter cette ligne « à blanc »
+#: rendrait le contrôle vert alors que plus aucune valeur n'arrive.
+FRESHNESS_MEASURE = "consommation"
+
+
 @dataclass(frozen=True, slots=True)
 class FreshnessReport:
     """Écart entre la donnée la plus récente et l'instant du contrôle."""
 
+    #: Dernier horodatage effectivement mesuré : c'est lui qui décide.
     latest: datetime | None
+    #: Dernier horodatage présent, mesuré ou non. Informatif.
+    latest_row: datetime | None
     lag_hours: float | None
     max_lag_hours: int
     row_count: int
@@ -114,7 +123,8 @@ def check_freshness(
     # La lecture seule évite de prendre le verrou d'écriture unique de DuckDB.
     loader = build_loader(settings, read_only=True)
     try:
-        latest = loader.latest_timestamp()
+        latest = loader.latest_timestamp(measure=FRESHNESS_MEASURE)
+        latest_row = loader.latest_timestamp()
         row_count = loader.row_count()
     finally:
         loader.close()
@@ -122,13 +132,18 @@ def check_freshness(
     lag = None if latest is None else (reference - latest) / timedelta(hours=1)
     report = FreshnessReport(
         latest=latest,
+        latest_row=latest_row,
         lag_hours=None if lag is None else round(lag, 3),
         max_lag_hours=settings.freshness_max_lag_hours,
         row_count=row_count,
     )
 
     if latest is None:
-        raise StaleDataError("le warehouse ne contient aucune donnee")
+        raise StaleDataError(
+            "le warehouse ne contient aucune donnee"
+            if row_count == 0
+            else f"{row_count} ligne(s) presentes mais aucune valeur de {FRESHNESS_MEASURE}"
+        )
     if not report.is_fresh:
         raise StaleDataError(
             f"donnee la plus recente {latest.isoformat()} "
@@ -136,8 +151,9 @@ def check_freshness(
         )
 
     logger.info(
-        "freshness ok latest=%s lag_hours=%s rows=%d",
+        "freshness ok latest_measured=%s latest_row=%s lag_hours=%s rows=%d",
         latest.isoformat(),
+        None if latest_row is None else latest_row.isoformat(),
         report.lag_hours,
         row_count,
     )

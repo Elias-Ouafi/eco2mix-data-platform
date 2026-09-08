@@ -187,11 +187,13 @@ Les deux bascules sont couvertes par des tests dédiés
 
 ## Consommation du quota API
 
-L'API ODRÉ est limitée à **50 000 appels par utilisateur et par mois**. Le client compte chaque
-requête HTTP réellement émise — retries compris — et la journalise en fin de run :
+L'API ODRÉ est limitée à **50 000 appels par dataset et par mois**, remis à zéro le 1er du mois.
+Le client suit cette consommation de deux façons et journalise les deux en fin de run : ses
+propres appels (retries compris) et le compteur renvoyé par l'API dans ses en-têtes
+`X-RateLimit-dataset-*`, qui fait autorité.
 
 ```
-INFO ingestion.extract_odre odre_api_calls=1 dataset=eco2mix-national-tr
+INFO ingestion.extract_odre odre_api_calls=1 dataset=eco2mix-national-tr quota_remaining=49997/50000 quota_reset=2026-10-01 00:00:00+00:00
 ```
 
 | Usage | Appels par run | Runs / mois | Total |
@@ -226,10 +228,22 @@ La bascule vers `/exports/csv` est automatique — un seul appel API pour l'ann�
 
 ## Contrôle de fraîcheur
 
-La dernière tâche du DAG lit `max(date_heure)` dans DuckDB **en lecture seule** et échoue si la
-donnée la plus récente a plus de 2 h de retard (`ECO2MIX_FRESHNESS_MAX_LAG_HOURS`). Une base
-vide ou absente échoue aussi : au premier run, l'absence de donnée est une anomalie, pas un
-état neutre.
+La dernière tâche du DAG lit DuckDB **en lecture seule** et échoue si la donnée la plus récente
+a plus de 2 h de retard (`ECO2MIX_FRESHNESS_MAX_LAG_HOURS`). Une base vide ou absente échoue
+aussi : au premier run, l'absence de donnée est une anomalie, pas un état neutre.
+
+Le contrôle porte sur le dernier horodatage **effectivement mesuré**, pas sur `max(date_heure)`.
+RTE publie en effet la ligne la plus récente « à blanc » — horodatage et échanges frontaliers
+présents, consommation et production encore nulles, remplies quelques minutes plus tard. Un
+contrôle basé sur `max(date_heure)` resterait donc au vert si le flux se mettait à publier des
+horodatages sans jamais les remplir : précisément l'incident qu'il est censé détecter. Le log
+distingue les deux :
+
+```
+INFO ingestion.pipeline freshness ok latest_measured=2026-09-08T17:45:00+00:00 latest_row=2026-09-08T18:00:00+00:00 lag_hours=0.488 rows=4
+```
+
+Ce décalage structurel (~15 à 30 min) reste très en deçà du seuil de 2 h.
 
 ### Le point de friction Airflow / DuckDB
 
@@ -272,17 +286,25 @@ aucun credential** :
 
 ## Chiffres clés
 
-<!-- À remplir après le premier run réel contre l'API. -->
+Mesurés lors du premier run de validation contre l'API (2026-09-08, fenêtre d'une heure) :
+
+| Indicateur | Valeur |
+|---|---|
+| Pas de temps du dataset | **15 min** (4 lignes/heure) |
+| Appels API par run horaire | **1** (`/records`, une seule page) |
+| Durée d'un cycle extract + load | **~0,5 s** |
+| Retard de la donnée mesurée à l'instant du contrôle | **~0,5 h** (seuil : 2 h) |
+| Taille d'un fichier Parquet (4 lignes, zstd) | 8,1 ko |
+
+<!-- À compléter après quelques jours d'exécution continue du DAG. -->
 
 | Indicateur | Valeur |
 |---|---|
 | Lignes en base (`raw.national_tr`) | _à compléter_ |
 | Profondeur d'historique | _à compléter_ |
-| Pas de temps observé du dataset | _à compléter_ (attendu : 15 min) |
-| Durée moyenne d'un run du DAG | _à compléter_ |
 | Taille d'une partition Parquet quotidienne | _à compléter_ |
 | Appels API consommés sur 30 jours | _à compléter_ (budget : ~880) |
-| Retard médian de la donnée la plus récente | _à compléter_ |
+| Taux de succès des runs du DAG | _à compléter_ |
 
 ---
 

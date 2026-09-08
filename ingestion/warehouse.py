@@ -81,8 +81,12 @@ class WarehouseLoader(Protocol):
         """Fusionne un fichier Parquet dans la table cible, sur la clé `date_heure`."""
         ...
 
-    def latest_timestamp(self) -> datetime | None:
-        """Plus récent `date_heure` présent, ou `None` si la table est vide."""
+    def latest_timestamp(self, *, measure: str | None = None) -> datetime | None:
+        """Plus récent `date_heure` présent, ou `None` si la table est vide.
+
+        `measure` restreint aux lignes où cette colonne est renseignée : RTE
+        publie l'horodatage le plus récent avant d'en avoir les mesures.
+        """
         ...
 
     def row_count(self) -> int:
@@ -264,10 +268,16 @@ class DuckDBLoader:
         """
         return self.read_only and isinstance(self.database, Path) and not self.database.exists()
 
-    def latest_timestamp(self) -> datetime | None:
+    def latest_timestamp(self, *, measure: str | None = None) -> datetime | None:
         if self._database_is_missing or not self._table_exists():
             return None
-        value = self._scalar(f"SELECT max({KEY_COLUMN}) FROM {self.qualified_table}")
+        predicate = ""
+        if measure is not None:
+            # Le nom est interpole dans le SQL : on le valide contre le schema.
+            if measure not in RAW_SCHEMA.names:
+                raise ValueError(f"colonne inconnue : {measure}")
+            predicate = f" WHERE {measure} IS NOT NULL"
+        value = self._scalar(f"SELECT max({KEY_COLUMN}) FROM {self.qualified_table}{predicate}")
         if value is None:
             return None
         # DuckDB renvoie un datetime aware ; on force UTC pour comparer sans surprise.

@@ -120,6 +120,50 @@ def test_freshness_fails_when_data_is_late(
         check_freshness(settings=settings, now=NOW + timedelta(hours=6))
 
 
+def test_freshness_ignores_the_unmeasured_leading_row(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+) -> None:
+    """La dernière ligne publiée par RTE n'a pas encore ses mesures : elle ne compte pas.
+
+    Sans cette règle, un flux qui publierait des horodatages sans jamais les
+    remplir laisserait le contrôle au vert.
+    """
+    httpx_mock.add_response(
+        json={
+            "total_count": 2,
+            "results": [
+                {"date_heure": "2026-09-07T03:00:00+00:00", "consommation": 42000},
+                {"date_heure": "2026-09-07T03:15:00+00:00", "consommation": None},
+            ],
+        }
+    )
+    run_ingestion(settings=settings, now=NOW)
+
+    report = check_freshness(settings=settings, now=NOW - timedelta(hours=1))
+
+    assert report.latest == datetime(2026, 9, 7, 3, 0, tzinfo=UTC)
+    assert report.latest_row == datetime(2026, 9, 7, 3, 15, tzinfo=UTC)
+    assert report.lag_hours == pytest.approx(2.0)
+
+
+def test_freshness_fails_when_rows_have_no_measure(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+) -> None:
+    """Des horodatages sans aucune mesure : le flux est mort, la tâche doit échouer."""
+    httpx_mock.add_response(
+        json={
+            "total_count": 1,
+            "results": [{"date_heure": "2026-09-07T03:00:00+00:00", "consommation": None}],
+        }
+    )
+    run_ingestion(settings=settings, now=NOW)
+
+    with pytest.raises(StaleDataError, match="aucune valeur de consommation"):
+        check_freshness(settings=settings, now=NOW)
+
+
 def test_freshness_fails_on_an_empty_warehouse(settings: Settings) -> None:
     """Avant le premier chargement, la base n'existe même pas : échec explicite."""
     assert not settings.duckdb_path.exists()

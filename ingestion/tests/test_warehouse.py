@@ -204,6 +204,31 @@ def test_merge_accepts_an_empty_batch(loader: DuckDBLoader, make_parquet) -> Non
     assert loader.row_count() == 0
 
 
+def test_latest_timestamp_can_ignore_unmeasured_rows(loader: DuckDBLoader, make_parquet) -> None:
+    """RTE publie l'horodatage le plus récent avant d'en avoir les mesures."""
+    parquet = make_parquet(
+        (
+            [
+                {"date_heure": T0, "consommation": 42000},
+                {"date_heure": T1, "consommation": None},  # ligne encore « à blanc »
+            ],
+            utc(2026, 9, 7, 6, 0),
+        )
+    )
+    loader.merge_parquet(parquet)
+
+    assert loader.latest_timestamp() == utc(2026, 9, 7, 3, 15)
+    assert loader.latest_timestamp(measure="consommation") == utc(2026, 9, 7, 3, 0)
+
+
+def test_latest_timestamp_rejects_an_unknown_measure(loader: DuckDBLoader) -> None:
+    """Le nom est interpolé dans le SQL : il doit appartenir au schéma."""
+    loader.ensure_table()
+
+    with pytest.raises(ValueError, match="colonne inconnue"):
+        loader.latest_timestamp(measure="1=1; DROP TABLE raw.national_tr")
+
+
 # --- Base sur fichier ------------------------------------------------------
 
 

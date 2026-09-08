@@ -6,9 +6,11 @@ Points de conception :
   `/records` (paginé, plafonné par l'API) et `/exports/csv` (un seul appel, pas
   de plafond) selon le volume estimé de la fenêtre. L'appelant n'a pas à savoir
   lequel est utilisé.
-* **Quota.** L'API ODRÉ est limitée à 50 000 appels par utilisateur et par mois.
+* **Quota.** L'API ODRÉ est limitée à 50 000 appels par dataset et par mois.
   Chaque requête HTTP réellement émise — y compris les tentatives de retry —
-  incrémente `client.calls`, journalisé en fin de run.
+  incrémente `client.calls`. Le quota restant annoncé par l'API dans ses
+  en-têtes `X-RateLimit-dataset-*` est relevé au passage : les deux chiffres
+  sont journalisés en fin de run.
 * **Robustesse.** Timeout explicite, retry exponentiel sur les erreurs réseau et
   les statuts transitoires (429, 5xx). Une 4xx définitive n'est jamais rejouée.
 """
@@ -18,7 +20,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -64,20 +66,45 @@ class RetryableStatusError(ExtractionError):
 
 
 class ApiCallCounter:
-    """Compteur d'appels HTTP, pour suivre la consommation du quota mensuel."""
+    """Compteur d'appels HTTP, pour suivre la consommation du quota mensuel.
+
+    Deux sources : nos propres appels (`count`, retries compris) et le compteur
+    d'ODRÉ lui-même, renvoyé en en-tête de chaque réponse. Le second est
+    l'autorité — il agrège tous les clients derrière la même adresse.
+    """
+
+    REMAINING_HEADER = "X-RateLimit-dataset-Remaining"
+    LIMIT_HEADER = "X-RateLimit-dataset-Limit"
+    RESET_HEADER = "X-RateLimit-dataset-Reset"
 
     def __init__(self) -> None:
         self.count = 0
+        self.quota_remaining: int | None = None
+        self.quota_limit: int | None = None
+        self.quota_reset: str | None = None
 
     def increment(self) -> int:
         self.count += 1
         return self.count
 
+    def record_quota(self, headers: Mapping[str, str]) -> None:
+        """Mémorise le quota restant annoncé par l'API, si l'en-tête est présent."""
+        self.quota_remaining = _optional_int(headers.get(self.REMAINING_HEADER))
+        self.quota_limit = _optional_int(headers.get(self.LIMIT_HEADER))
+        self.quota_reset = headers.get(self.RESET_HEADER) or None
+
     def __int__(self) -> int:
         return self.count
 
     def __repr__(self) -> str:  # pragma: no cover - confort de debug
-        return f"ApiCallCounter(count={self.count})"
+        return f"ApiCallCounter(count={self.count}, quota_remaining={self.quota_remaining})"
+
+
+def _optional_int(value: str | None) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except ValueError:  # en-tête présent mais illisible : on ne casse pas le run
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +177,12 @@ class OdreClient:
     def close(self) -> None:
         """Ferme le client HTTP et journalise la consommation du quota."""
         logger.info(
-            "odre_api_calls=%d dataset=%s",
+            "odre_api_calls=%d dataset=%s quota_remaining=%s/%s quota_reset=%s",
             self.calls.count,
             self.settings.dataset_id,
+            self.calls.quota_remaining,
+            self.calls.quota_limit,
+            self.calls.quota_reset,
         )
         if self._owns_client:
             self._client.close()
@@ -236,6 +266,7 @@ class OdreClient:
         def _send() -> httpx.Response:
             self.calls.increment()
             response = self._client.get(path, params=params)
+            self.calls.record_quota(response.headers)
             if response.status_code in RETRYABLE_STATUS_CODES:
                 raise RetryableStatusError(response.status_code)
             response.raise_for_status()
