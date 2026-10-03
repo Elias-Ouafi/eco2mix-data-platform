@@ -15,6 +15,9 @@ Implémentation DuckDB du MERGE : `DELETE` des clés du lot puis `INSERT`, le to
 dans une transaction. Sémantiquement identique à un `MERGE ... WHEN MATCHED THEN
 UPDATE`, mais portable sur toutes les versions de DuckDB. `BigQueryLoader`
 utilisera l'instruction `MERGE` native, ce qui ne change rien à l'appelant.
+
+Une instance de loader cible **un dataset** : la table, le schéma et la DDL sont
+dérivés de son `DatasetSpec`.
 """
 
 from __future__ import annotations
@@ -29,13 +32,15 @@ import duckdb
 import pyarrow as pa
 
 from ingestion.config import Settings, get_settings
-from ingestion.transform import KEY_COLUMN, RAW_SCHEMA
+from ingestion.datasets import KEY_COLUMN, NATIONAL_TR, DatasetSpec
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SCHEMA = "raw"
+#: Couche médaillon alimentée par ce module. Silver et gold sont construites
+#: par dbt (`dbt/`) à partir de ce schéma, jamais écrites depuis Python.
+DEFAULT_SCHEMA = "bronze"
 
-#: Correspondance des types pyarrow vers DuckDB. Le schéma Parquet reste la
+#: Correspondance des types pyarrow vers DuckDB. Le schéma du spec reste la
 #: source de vérité unique : la DDL en est dérivée, jamais recopiée à la main.
 _DUCKDB_TYPES: tuple[tuple[object, str], ...] = (
     (pa.timestamp("us", tz="UTC"), "TIMESTAMPTZ"),
@@ -73,6 +78,8 @@ class LoadResult:
 class WarehouseLoader(Protocol):
     """Contrat de chargement, indépendant du moteur de stockage."""
 
+    spec: DatasetSpec
+
     def ensure_table(self) -> None:
         """Crée le schéma et la table cible s'ils n'existent pas."""
         ...
@@ -87,6 +94,10 @@ class WarehouseLoader(Protocol):
         `measure` restreint aux lignes où cette colonne est renseignée : RTE
         publie l'horodatage le plus récent avant d'en avoir les mesures.
         """
+        ...
+
+    def count_distinct_keys(self, *, start: datetime, end: datetime) -> int:
+        """Nombre de `date_heure` distincts dans l'intervalle `[start, end)`."""
         ...
 
     def row_count(self) -> int:
@@ -108,22 +119,22 @@ def _duckdb_type(arrow_type: pa.DataType) -> str:
 class DuckDBLoader:
     """Implémentation locale du contrat `WarehouseLoader`.
 
-    DuckDB n'accepte qu'**un seul writer** sur un fichier : le DAG sérialise les
-    tâches d'écriture (`max_active_runs=1` et pool `duckdb_writer` à 1 slot), et
-    les lectures — le contrôle de fraîcheur — ouvrent la base en `read_only`.
+    DuckDB n'accepte qu'**un seul writer** sur un fichier : les DAGs sérialisent
+    les tâches d'écriture (`max_active_runs=1` et pool `duckdb_writer` à 1 slot),
+    et les lectures — contrôles qualité — ouvrent la base en `read_only`.
     """
 
     def __init__(
         self,
         database: Path | str,
         *,
+        spec: DatasetSpec = NATIONAL_TR,
         schema: str = DEFAULT_SCHEMA,
-        table: str = "national_tr",
         read_only: bool = False,
     ) -> None:
         self.database = database
+        self.spec = spec
         self.schema = schema
-        self.table = table
         self.read_only = read_only
         self._connection: duckdb.DuckDBPyConnection | None = None
 
@@ -131,16 +142,20 @@ class DuckDBLoader:
 
     @classmethod
     def from_settings(
-        cls, settings: Settings | None = None, *, read_only: bool = False
+        cls,
+        settings: Settings | None = None,
+        *,
+        spec: DatasetSpec = NATIONAL_TR,
+        read_only: bool = False,
     ) -> DuckDBLoader:
         settings = settings or get_settings()
-        return cls(
-            database=settings.duckdb_path,
-            table=settings.table_name,
-            read_only=read_only,
-        )
+        return cls(database=settings.duckdb_path, spec=spec, read_only=read_only)
 
     # -- Cycle de vie -------------------------------------------------------
+
+    @property
+    def table(self) -> str:
+        return self.spec.table_name
 
     @property
     def qualified_table(self) -> str:
@@ -153,7 +168,7 @@ class DuckDBLoader:
         Un `SELECT *` ramènerait aussi les colonnes de partition Hive déduites du
         chemin (`ingest_date=...`), absentes de la table cible.
         """
-        return ", ".join(RAW_SCHEMA.names)
+        return ", ".join(self.spec.schema.names)
 
     @property
     def connection(self) -> duckdb.DuckDBPyConnection:
@@ -178,14 +193,14 @@ class DuckDBLoader:
     # -- Schéma -------------------------------------------------------------
 
     def ensure_table(self) -> None:
-        """Crée `raw.national_tr` à partir du schéma Parquet, avec clé primaire.
+        """Crée la table cible à partir du schéma du spec, avec clé primaire.
 
         La clé primaire sur `date_heure` rend l'unicité structurelle : même si le
         code de fusion régressait, la base refuserait un doublon.
         """
         columns = ",\n    ".join(
             f"{field.name} {_duckdb_type(field.type)}" + ("" if field.nullable else " NOT NULL")
-            for field in RAW_SCHEMA
+            for field in self.spec.schema
         )
         self.connection.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
         self.connection.execute(
@@ -263,7 +278,7 @@ class DuckDBLoader:
     def _database_is_missing(self) -> bool:
         """Base absente ouverte en lecture seule : à traiter comme vide, pas comme une panne.
 
-        C'est le cas au tout premier run, quand le contrôle de fraîcheur s'exécute
+        C'est le cas au tout premier run, quand un contrôle qualité s'exécute
         avant qu'un chargement ait créé le fichier.
         """
         return self.read_only and isinstance(self.database, Path) and not self.database.exists()
@@ -274,7 +289,7 @@ class DuckDBLoader:
         predicate = ""
         if measure is not None:
             # Le nom est interpole dans le SQL : on le valide contre le schema.
-            if measure not in RAW_SCHEMA.names:
+            if measure not in self.spec.schema.names:
                 raise ValueError(f"colonne inconnue : {measure}")
             predicate = f" WHERE {measure} IS NOT NULL"
         value = self._scalar(f"SELECT max({KEY_COLUMN}) FROM {self.qualified_table}{predicate}")
@@ -282,6 +297,17 @@ class DuckDBLoader:
             return None
         # DuckDB renvoie un datetime aware ; on force UTC pour comparer sans surprise.
         return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+
+    def count_distinct_keys(self, *, start: datetime, end: datetime) -> int:
+        if self._database_is_missing or not self._table_exists():
+            return 0
+        return self._scalar(
+            f"""
+            SELECT count(DISTINCT {KEY_COLUMN}) FROM {self.qualified_table}
+            WHERE {KEY_COLUMN} >= $start AND {KEY_COLUMN} < $end
+            """,
+            {"start": start, "end": end},
+        )
 
     def row_count(self) -> int:
         if self._database_is_missing or not self._table_exists():
@@ -306,7 +332,12 @@ class DuckDBLoader:
         return None if row is None else row[0]
 
 
-def build_loader(settings: Settings | None = None, *, read_only: bool = False) -> WarehouseLoader:
+def build_loader(
+    settings: Settings | None = None,
+    *,
+    spec: DatasetSpec = NATIONAL_TR,
+    read_only: bool = False,
+) -> WarehouseLoader:
     """Fabrique le loader correspondant au backend configuré.
 
     Point d'extension unique pour la migration : ajouter `bigquery` ici suffira,
@@ -314,5 +345,5 @@ def build_loader(settings: Settings | None = None, *, read_only: bool = False) -
     """
     settings = settings or get_settings()
     if settings.warehouse_backend == "duckdb":
-        return DuckDBLoader.from_settings(settings, read_only=read_only)
+        return DuckDBLoader.from_settings(settings, spec=spec, read_only=read_only)
     raise NotImplementedError(f"backend warehouse inconnu : {settings.warehouse_backend}")

@@ -1,0 +1,61 @@
+version: 2
+
+seeds:
+  - name: dim_filiere
+    description: >
+      Référentiel des filières de production : famille, caractère renouvelable
+      et bas-carbone, ordre et couleur d'affichage. Source de vérité unique des
+      regroupements utilisés par les tables de faits.
+    config:
+      column_types:
+        est_renouvelable: boolean
+        est_bas_carbone: boolean
+        ordre_affichage: integer
+    columns:
+      - name: filiere
+        data_tests: [unique, not_null]
+      - name: famille
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [nucleaire, renouvelable, fossile]
+
+  - name: tarifs_tempo
+    description: >
+      Grille réglementée de l'option Tempo (tarif bleu EDF), prix TTC du kWh par
+      couleur de jour et période (hc : 22 h–6 h, hp : 6 h–22 h), puissance 6 kVA
+      et plus. Validité `[date_debut, date_fin)`, `date_fin` vide pour la grille en
+      vigueur. Source : grilles publiées au 1er février et au 1er août 2026
+      (https://www.fournisseurs-electricite.com/fournisseurs/edf/tarifs/tempo/prix),
+      à vérifier et compléter à chaque mouvement tarifaire (en général 1er février
+      et 1er août). Hors de ces dates, les prix restent nuls dans les tables gold.
+    config:
+      column_types:
+        date_debut: date
+        date_fin: date
+        prix_ttc_eur_kwh: double
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [date_debut, couleur, periode]
+    columns:
+      - name: couleur
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [bleu, blanc, rouge]
+      - name: periode
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [hc, hp]
+      - name: prix_ttc_eur_kwh
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 2

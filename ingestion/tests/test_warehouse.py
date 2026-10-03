@@ -15,6 +15,7 @@ import pyarrow as pa
 import pytest
 
 from ingestion.config import Settings
+from ingestion.datasets import NATIONAL_TR
 from ingestion.transform import records_to_table, write_parquet
 from ingestion.warehouse import DuckDBLoader, LoadResult, WarehouseLoader, build_loader
 
@@ -35,12 +36,12 @@ def make_parquet(tmp_path: Path):
         nonlocal counter
         counter += 1
         tables = [
-            records_to_table(records, dataset_id="eco2mix-national-tr", ingested_at=ingested_at)
+            records_to_table(records, spec=NATIONAL_TR, ingested_at=ingested_at)
             for records, ingested_at in batches
         ]
         return write_parquet(
             pa.concat_tables(tables),
-            raw_dataset_dir=tmp_path / "eco2mix_national_tr",
+            dataset_dir=tmp_path / "eco2mix_national_tr",
             run_id=f"test-{counter}",
             ingest_date=date(2026, 9, 7),
         )
@@ -70,7 +71,7 @@ def test_build_loader_returns_the_configured_backend(tmp_path: Path) -> None:
 
     assert isinstance(built, WarehouseLoader)
     assert isinstance(built, DuckDBLoader)
-    assert built.qualified_table == "raw.national_tr"
+    assert built.qualified_table == "bronze.national_tr"
 
 
 # --- Schéma ----------------------------------------------------------------
@@ -83,7 +84,7 @@ def test_ensure_table_is_idempotent(loader: DuckDBLoader) -> None:
     assert loader.row_count() == 0
     columns = loader.connection.execute(
         "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = 'raw' AND table_name = 'national_tr'"
+        "WHERE table_schema = 'bronze' AND table_name = 'national_tr'"
     ).fetchall()
     assert ("date_heure",) in columns
     assert ("ingested_at_utc",) in columns
@@ -99,7 +100,7 @@ def test_primary_key_forbids_duplicate_keys(loader: DuckDBLoader) -> None:
     """L'unicité est structurelle, pas seulement procédurale."""
     loader.ensure_table()
     insert = (
-        "INSERT INTO raw.national_tr (date_heure, ingested_at_utc, source_dataset) "
+        "INSERT INTO bronze.national_tr (date_heure, ingested_at_utc, source_dataset) "
         "VALUES (TIMESTAMPTZ '2026-09-07 03:00:00+00', TIMESTAMPTZ '2026-09-07 06:00:00+00', 'ds')"
     )
     loader.connection.execute(insert)
@@ -125,7 +126,7 @@ def test_merge_inserts_new_rows(loader: DuckDBLoader, make_parquet) -> None:
     result = loader.merge_parquet(parquet)
 
     assert result == LoadResult(
-        target="raw.national_tr",
+        target="bronze.national_tr",
         rows_in_file=2,
         rows_merged=2,
         rows_inserted=2,
@@ -154,7 +155,7 @@ def test_merge_is_idempotent_when_replayed(loader: DuckDBLoader, make_parquet) -
     assert replay.rows_inserted == 0
     assert replay.rows_updated == 2
     assert loader.connection.execute(
-        "SELECT count(DISTINCT date_heure) FROM raw.national_tr"
+        "SELECT count(DISTINCT date_heure) FROM bronze.national_tr"
     ).fetchone() == (2,)
 
 
@@ -169,7 +170,7 @@ def test_merge_overwrites_revised_values(loader: DuckDBLoader, make_parquet) -> 
     assert loader.row_count() == 1
     assert result.rows_updated == 1
     row = loader.connection.execute(
-        "SELECT consommation, ingested_at_utc FROM raw.national_tr"
+        "SELECT consommation, ingested_at_utc FROM bronze.national_tr"
     ).fetchone()
     assert row == (42500.0, utc(2026, 9, 7, 7, 0))
 
@@ -189,7 +190,7 @@ def test_merge_keeps_the_latest_revision_within_a_single_batch(
     assert result.rows_merged == 1
     assert result.rows_deduplicated == 1
     assert loader.row_count() == 1
-    assert loader.connection.execute("SELECT consommation FROM raw.national_tr").fetchone() == (
+    assert loader.connection.execute("SELECT consommation FROM bronze.national_tr").fetchone() == (
         42500.0,
     )
 
@@ -226,7 +227,7 @@ def test_latest_timestamp_rejects_an_unknown_measure(loader: DuckDBLoader) -> No
     loader.ensure_table()
 
     with pytest.raises(ValueError, match="colonne inconnue"):
-        loader.latest_timestamp(measure="1=1; DROP TABLE raw.national_tr")
+        loader.latest_timestamp(measure="1=1; DROP TABLE bronze.national_tr")
 
 
 # --- Base sur fichier ------------------------------------------------------

@@ -1,0 +1,31 @@
+# Couches silver et gold de l'architecture médaillon, construites dans DuckDB.
+# La couche bronze est alimentée par le package Python `ingestion` (voir README).
+name: eco2mix
+version: "0.1.0"
+config-version: 2
+profile: eco2mix
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "logs"]
+
+flags:
+  # Pas d'écriture de `.user.yml` : le projet est monté en lecture seule dans Airflow.
+  send_anonymous_usage_stats: false
+
+models:
+  eco2mix:
+    # Volumétrie modeste (~35 000 lignes par an et par dataset) : une
+    # reconstruction complète à chaque run coûte quelques secondes et reste
+    # plus simple à raisonner qu'un modèle incrémental.
+    +materialized: table
+    silver:
+      +schema: silver
+    gold:
+      +schema: gold
+
+seeds:
+  eco2mix:
+    +schema: gold

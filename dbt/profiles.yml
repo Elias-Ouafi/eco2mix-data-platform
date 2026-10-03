@@ -1,0 +1,13 @@
+# Le chemin de la base suit la même variable que le package `ingestion` : lancé
+# depuis la racine du dépôt, le défaut pointe sur le même fichier.
+eco2mix:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      path: "{{ env_var('ECO2MIX_DUCKDB_PATH', 'data/warehouse/eco2mix.duckdb') }}"
+      threads: 4
+      settings:
+        # Les dates calendaires sont calculées explicitement en Europe/Paris ;
+        # la session reste en UTC pour que rien ne dépende du poste.
+        TimeZone: UTC

@@ -151,9 +151,12 @@ class OdreClient:
         self,
         settings: Settings | None = None,
         *,
+        dataset_id: str | None = None,
         client: httpx.Client | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        #: Un client cible un dataset ; par defaut celui du temps reel.
+        self.dataset_id = dataset_id or self.settings.dataset_id
         self.calls = ApiCallCounter()
         self._owns_client = client is None
         self._client = client or httpx.Client(
@@ -179,7 +182,7 @@ class OdreClient:
         logger.info(
             "odre_api_calls=%d dataset=%s quota_remaining=%s/%s quota_reset=%s",
             self.calls.count,
-            self.settings.dataset_id,
+            self.dataset_id,
             self.calls.quota_remaining,
             self.calls.quota_limit,
             self.calls.quota_reset,
@@ -210,7 +213,7 @@ class OdreClient:
         Lève `PaginationLimitExceededError` si la fenêtre dépasse la profondeur
         maximale de l'endpoint : c'est le signal qu'il faut passer par l'export.
         """
-        path = f"catalog/datasets/{self.settings.dataset_id}/records"
+        path = f"catalog/datasets/{self.dataset_id}/records"
         records: list[dict[str, Any]] = []
         offset = 0
 
@@ -244,7 +247,7 @@ class OdreClient:
         Les valeurs sont des chaînes (les vides valent `null`) ; `transform`
         se charge du typage.
         """
-        path = f"catalog/datasets/{self.settings.dataset_id}/exports/csv"
+        path = f"catalog/datasets/{self.dataset_id}/exports/csv"
         response = self._get(
             path,
             params={

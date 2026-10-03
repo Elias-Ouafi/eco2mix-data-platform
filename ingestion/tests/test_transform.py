@@ -13,9 +13,8 @@ from itertools import pairwise
 import pyarrow.parquet as pq
 import pytest
 
+from ingestion.datasets import KEY_COLUMN, NATIONAL_TR
 from ingestion.transform import (
-    KEY_COLUMN,
-    RAW_SCHEMA,
     NonExistentLocalTimeError,
     normalize_datetimes,
     records_to_table,
@@ -23,6 +22,7 @@ from ingestion.transform import (
     write_parquet,
 )
 
+SCHEMA = NATIONAL_TR.schema
 INGESTED_AT = datetime(2026, 9, 7, 6, 30, tzinfo=UTC)
 
 
@@ -126,9 +126,9 @@ def test_records_to_table_applies_schema_and_metadata() -> None:
         {"date_heure": "2026-09-07T03:00:00+00:00", "consommation": 42000, "perimetre": "France"},
     ]
 
-    table = records_to_table(records, dataset_id="eco2mix-national-tr", ingested_at=INGESTED_AT)
+    table = records_to_table(records, spec=NATIONAL_TR, ingested_at=INGESTED_AT)
 
-    assert table.schema == RAW_SCHEMA
+    assert table.schema == SCHEMA
     # La table est triée par clé, quel que soit l'ordre d'arrivée.
     assert table.column(KEY_COLUMN).to_pylist() == [utc(2026, 9, 7, 3, 0), utc(2026, 9, 7, 3, 15)]
     assert table.column("consommation").to_pylist() == [42000.0, 41800.0]
@@ -144,7 +144,7 @@ def test_records_to_table_coerces_csv_strings() -> None:
         {"date_heure": "2026-09-07T03:00:00+00:00", "consommation": "42000", "solaire": ""},
     ]
 
-    table = records_to_table(records, dataset_id="ds", ingested_at=INGESTED_AT)
+    table = records_to_table(records, spec=NATIONAL_TR, ingested_at=INGESTED_AT)
 
     assert table.column("consommation").to_pylist() == [42000.0]
     assert table.column("solaire").to_pylist() == [None]
@@ -157,21 +157,21 @@ def test_records_to_table_drops_rows_without_key() -> None:
         {"consommation": 2},
     ]
 
-    table = records_to_table(records, dataset_id="ds", ingested_at=INGESTED_AT)
+    table = records_to_table(records, spec=NATIONAL_TR, ingested_at=INGESTED_AT)
 
     assert table.num_rows == 1
 
 
 def test_records_to_table_rejects_naive_ingested_at() -> None:
     with pytest.raises(ValueError, match="aware"):
-        records_to_table([], dataset_id="ds", ingested_at=datetime(2026, 9, 7, 6, 30))
+        records_to_table([], spec=NATIONAL_TR, ingested_at=datetime(2026, 9, 7, 6, 30))
 
 
 def test_records_to_table_handles_empty_input() -> None:
-    table = records_to_table([], dataset_id="ds", ingested_at=INGESTED_AT)
+    table = records_to_table([], spec=NATIONAL_TR, ingested_at=INGESTED_AT)
 
     assert table.num_rows == 0
-    assert table.schema == RAW_SCHEMA
+    assert table.schema == SCHEMA
 
 
 # --- Écriture Parquet ------------------------------------------------------
@@ -180,13 +180,13 @@ def test_records_to_table_handles_empty_input() -> None:
 def test_write_parquet_creates_hive_partition(tmp_path) -> None:
     table = records_to_table(
         [{"date_heure": "2026-09-07T03:00:00+00:00", "consommation": 42000}],
-        dataset_id="eco2mix-national-tr",
+        spec=NATIONAL_TR,
         ingested_at=INGESTED_AT,
     )
 
     path = write_parquet(
         table,
-        raw_dataset_dir=tmp_path / "eco2mix_national_tr",
+        dataset_dir=tmp_path / "eco2mix_national_tr",
         # Un run_id Airflow contient `:` et `+`, interdits dans un nom de fichier Windows.
         run_id="scheduled__2026-09-07T06:00:00+00:00",
         ingest_date=date(2026, 9, 7),
@@ -195,5 +195,5 @@ def test_write_parquet_creates_hive_partition(tmp_path) -> None:
     assert path.parent.name == "ingest_date=2026-09-07"
     assert path.name == "part-scheduled__2026-09-07T06-00-00-00-00.parquet"
     reloaded = pq.read_table(path)
-    assert reloaded.schema == RAW_SCHEMA
+    assert reloaded.schema == SCHEMA
     assert reloaded.num_rows == 1

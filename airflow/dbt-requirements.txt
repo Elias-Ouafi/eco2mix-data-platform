@@ -1,0 +1,6 @@
+# Environnement virtuel dedie a dbt dans l'image (voir Dockerfile) : dbt-core
+# epingle des dependances qui entrent en conflit avec celles d'Airflow.
+# Garder duckdb dans la meme serie mineure que requirements.txt : les deux
+# environnements ouvrent le meme fichier de base.
+dbt-duckdb>=1.10,<2
+duckdb>=1.5,<1.6
