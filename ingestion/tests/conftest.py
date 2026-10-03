@@ -36,7 +36,7 @@ def settings(tmp_path: Path) -> Settings:
         api_base_url=TEST_BASE_URL,
         dataset_id="eco2mix-national-tr",
         retry_wait_seconds=0.0,
-        raw_dir=tmp_path / "raw",
+        bronze_dir=tmp_path / "bronze",
         duckdb_path=tmp_path / "warehouse" / "eco2mix.duckdb",
     )
 
@@ -61,6 +61,16 @@ def records_url() -> str:
 @pytest.fixture
 def export_url() -> str:
     return f"{TEST_BASE_URL}/catalog/datasets/eco2mix-national-tr/exports/csv"
+
+
+@pytest.fixture(scope="session")
+def medallion_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Base DuckDB de bronze à gold (voir `medallion.py`), construite une fois par session."""
+    from ingestion.tests import medallion
+
+    if medallion.DBT_BIN is None:
+        pytest.skip("dbt non installé (uv sync --group dbt)")
+    return medallion.build_warehouse(tmp_path_factory.mktemp("medaillon"))
 
 
 @pytest.fixture

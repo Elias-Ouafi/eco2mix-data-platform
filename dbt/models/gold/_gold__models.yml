@@ -1,0 +1,77 @@
+version: 2
+
+# Couche gold : tables métier prêtes à l'emploi (dashboard, analyses).
+# Unités dans le nom des colonnes : _mw (puissance), _gwh / _mwh (énergie).
+models:
+  - name: fct_production_filiere
+    description: Production par filière au format long, au pas de mesure.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [date_heure, filiere]
+    columns:
+      - name: filiere
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_filiere')
+                field: filiere
+
+  - name: fct_mix
+    description: Mix électrique au pas de mesure, avec regroupements par famille et parts.
+    columns:
+      - name: date_heure
+        data_tests: [unique, not_null]
+      - name: part_bas_carbone
+        description: Part de la production issue de filières bas-carbone (0 à 1).
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: part_renouvelable
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: fct_mix_journalier
+    description: Bilan énergétique et carbone par jour civil (heure de Paris).
+    columns:
+      - name: jour
+        data_tests: [unique, not_null]
+      - name: heures_du_jour
+        description: 23, 24 ou 25 selon les changements d'heure.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [23, 24, 25]
+                quote: false
+      - name: est_complet
+        description: Vrai si les mesures couvrent toute la journée ; sinon les totaux sont partiels.
+
+  - name: fct_creneau_horaire
+    description: >
+      Une ligne par heure : intensité carbone, couleur Tempo (jour Tempo de 6 h à
+      6 h), période tarifaire (hc 22 h–6 h) et prix TTC du kWh. Base des rapports
+      mensuels « pics de carbone et meilleurs créneaux ».
+    columns:
+      - name: heure_utc
+        description: Début de l'heure, en UTC (clé).
+        data_tests: [unique, not_null]
+      - name: periode_tarifaire
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [hc, hp]
+      - name: couleur_tempo
+        description: Nulle si le calendrier Tempo n'a pas été chargé pour ce jour.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [bleu, blanc, rouge]
+      - name: prix_ttc_eur_kwh
+        description: Nul sans couleur Tempo ou hors de la grille `tarifs_tempo`.

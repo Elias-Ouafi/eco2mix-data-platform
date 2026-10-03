@@ -1,0 +1,33 @@
+version: 2
+
+# Couche bronze : alimentée par le package Python `ingestion`, pas par dbt.
+# Une table par dataset ODRÉ, miroir fidèle de la source : mêmes colonnes,
+# dernière version publiée de chaque pas de temps (MERGE sur `date_heure`).
+# L'historique complet des révisions reste dans les Parquet de `data/bronze/`.
+sources:
+  - name: bronze
+    schema: bronze
+    description: Données éCO2mix telles que publiées par l'API ODRÉ, normalisées en UTC.
+    tables:
+      - name: national_tr
+        description: >
+          éCO2mix national temps réel (pas 15 min), chargé toutes les heures.
+          La ligne la plus récente est souvent publiée « à blanc » (mesures nulles).
+        columns:
+          - name: date_heure
+            data_tests: [unique, not_null]
+      - name: national_cons_def
+        description: >
+          éCO2mix national consolidé puis définitif, rechargé tous les mois.
+          Une ligne par quart d'heure, mais mesures renseignées à la demi-heure seulement.
+        columns:
+          - name: date_heure
+            data_tests: [unique, not_null]
+      - name: rte_tempo
+        description: >
+          Calendrier Tempo publié par l'API RTE « Tempo Like Supply Contract » :
+          une ligne par jour civil, `date_heure` = minuit heure de Paris, `couleur`
+          parmi BLUE, WHITE, RED. Alimenté à la demande par le DAG de rapport mensuel.
+        columns:
+          - name: date_heure
+            data_tests: [unique, not_null]

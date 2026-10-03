@@ -1,0 +1,93 @@
+version: 2
+
+# Couche silver : données nettoyées, typées et conformes, sans règle métier.
+# Une ligne = une mesure réelle ; la qualité et le pas de temps sont explicites.
+models:
+  - name: national_tr
+    description: Temps réel nettoyé (lignes « à blanc » écartées), pas de 15 min.
+    columns:
+      - name: date_heure
+        description: Début du quart d'heure mesuré, en UTC.
+        data_tests: [unique, not_null]
+      - name: qualite
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [temps_reel]
+      - name: consommation
+        description: Consommation nationale, MW.
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 15000
+                max_value: 110000
+              config:
+                severity: warn
+      - name: taux_co2
+        description: Intensité carbone de la production, gCO₂/kWh.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 250
+              config:
+                severity: warn
+
+  - name: national_cons_def
+    description: Consolidé/définitif nettoyé (demi-heures mesurées uniquement), pas de 30 min.
+    columns:
+      - name: date_heure
+        description: Début de la demi-heure mesurée, en UTC.
+        data_tests: [unique, not_null]
+      - name: qualite
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [consolidee, definitive]
+      - name: consommation
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 15000
+                max_value: 110000
+              config:
+                severity: warn
+
+  - name: mix_unifie
+    description: >
+      Série unique, consolidé/définitif puis temps réel au-delà de la dernière
+      mesure consolidée. Le pas varie (30 puis 15 min) et est porté par `pas_minutes`.
+    columns:
+      - name: date_heure
+        data_tests: [unique, not_null]
+      - name: qualite
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [temps_reel, consolidee, definitive]
+      - name: pas_minutes
+        description: Durée couverte par la mesure, en minutes (15 ou 30).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [15, 30]
+                quote: false
+
+  - name: tempo_jours
+    description: Calendrier Tempo, une ligne par jour Tempo (de 6 h à 6 h le lendemain).
+    columns:
+      - name: jour_tempo
+        description: Jour civil (heure de Paris) dont la couleur commence à 6 h.
+        data_tests: [unique, not_null]
+      - name: couleur
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [bleu, blanc, rouge]

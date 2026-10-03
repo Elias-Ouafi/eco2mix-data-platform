@@ -16,7 +16,7 @@ env:
 
 jobs:
   lint-test:
-    name: ruff + pytest
+    name: ruff + pytest + dbt build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,8 +29,10 @@ jobs:
       - name: Install uv
         run: pip install uv
 
+      # Les groupes dbt et report activent les tests de bout en bout des
+      # couches silver et gold et du rapport PDF, ignores sinon.
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --group dbt --group report
 
       - name: Lint
         run: uv run ruff check .
@@ -39,7 +41,8 @@ jobs:
         run: uv run ruff format --check .
 
       # Les appels HTTP sont simules par pytest-httpx : le runner n'atteint
-      # jamais l'API ODRE, et aucun secret n'est necessaire.
+      # jamais l'API ODRE, et aucun secret n'est necessaire. dbt build tourne
+      # sur une base DuckDB temporaire alimentee par des donnees synthetiques.
       - name: Tests
         run: uv run pytest
 
@@ -73,13 +76,22 @@ jobs:
           if bag.import_errors:
               raise SystemExit(f"erreurs d'import : {bag.import_errors}")
 
-          dag = bag.dags["eco2mix_hourly_ingest"]
-          assert dag.max_active_runs == 1, "un seul run a la fois (writer DuckDB unique)"
-          assert {task.task_id for task in dag.tasks} == {
-              "extract",
-              "load_raw",
-              "dbt_build",
-              "freshness_check",
+          expected = {
+              "eco2mix_hourly_ingest": {"extract", "load_bronze", "dbt_build", "freshness_check"},
+              "eco2mix_monthly_consolidation": {"extract", "load_bronze", "dbt_build", "coverage_check"},
+              "eco2mix_monthly_report": {"resolve_month", "extract_tempo", "load_tempo", "dbt_build", "generate_report"},
           }
-          print(f"OK : {len(bag.dags)} DAG(s), {len(dag.tasks)} taches")
+          # Taches qui n'ouvrent pas DuckDB : hors du pool.
+          hors_pool = {"extract", "resolve_month", "extract_tempo"}
+          assert set(bag.dags) == set(expected), f"DAGs inattendus : {sorted(bag.dags)}"
+          for dag_id, task_ids in expected.items():
+              dag = bag.dags[dag_id]
+              assert dag.max_active_runs == 1, f"{dag_id} : un seul run a la fois (writer DuckDB unique)"
+              assert {task.task_id for task in dag.tasks} == task_ids, dag_id
+              # Toute tache qui ecrit ou lit DuckDB passe par le pool a 1 slot.
+              for task_id in task_ids - hors_pool:
+                  assert dag.get_task(task_id).pool == "duckdb_writer", f"{dag_id}.{task_id}"
+          # Le rapport se declenche a la demande, jamais sur planification.
+          assert bag.dags["eco2mix_monthly_report"].schedule_interval is None
+          print(f"OK : {len(bag.dags)} DAG(s)")
           PY

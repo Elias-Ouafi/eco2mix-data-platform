@@ -1,0 +1,9 @@
+filiere,libelle,famille,est_renouvelable,est_bas_carbone,ordre_affichage,couleur
+nucleaire,Nucléaire,nucleaire,false,true,1,#E4A701
+hydraulique,Hydraulique,renouvelable,true,true,2,#2772B2
+eolien,Éolien,renouvelable,true,true,3,#72CBB7
+solaire,Solaire,renouvelable,true,true,4,#D66B0D
+bioenergies,Bioénergies,renouvelable,true,true,5,#156956
+gaz,Gaz,fossile,false,false,6,#F30A0A
+charbon,Charbon,fossile,false,false,7,#AC8C35
+fioul,Fioul,fossile,false,false,8,#8356A2

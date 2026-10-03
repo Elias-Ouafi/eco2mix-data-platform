@@ -1,9 +1,11 @@
 """Configuration du socle d'ingestion, lue depuis l'environnement.
 
-Toutes les variables sont préfixées `ECO2MIX_` (voir `.env.example`). Aucune
-n'est un secret : l'API ODRÉ est publique et anonyme. Les chemins sont résolus
-relativement au répertoire courant, ce qui permet de pointer sur le volume monté
-`/usr/local/airflow/data` dans les conteneurs Astro sans changer de code.
+Toutes les variables sont préfixées `ECO2MIX_` (voir `.env.example`). L'API
+ODRÉ est publique et anonyme ; seuls les identifiants de l'API RTE (calendrier
+Tempo) sont des secrets, typés `SecretStr` pour ne jamais apparaître dans un
+log. Les chemins sont résolus relativement au répertoire courant, ce qui permet
+de pointer sur le volume monté `/usr/local/airflow/data` dans les conteneurs
+Astro sans changer de code.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,9 +28,21 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Source ------------------------------------------------------------
+    # --- Sources -----------------------------------------------------------
     api_base_url: str = "https://odre.opendatasoft.com/api/explore/v2.1"
+
+    #: Dataset temps réel, ingéré toutes les heures.
     dataset_id: str = "eco2mix-national-tr"
+
+    #: Dataset consolidé puis définitif, ingéré tous les mois.
+    consolidation_dataset_id: str = "eco2mix-national-cons-def"
+
+    # --- RTE Data (calendrier Tempo) --------------------------------------
+    #: Portail API de RTE. Compte gratuit sur https://data.rte-france.com, puis
+    #: abonnement à l'API « Tempo Like Supply Contract » pour obtenir ces identifiants.
+    rte_api_base_url: str = "https://digital.iservices.rte-france.com"
+    rte_client_id: str | None = None
+    rte_client_secret: SecretStr | None = None
 
     # --- Fenêtre d'extraction ---------------------------------------------
     #: Profondeur de la fenêtre glissante par défaut. 3 h couvre le délai de
@@ -48,25 +62,29 @@ class Settings(BaseSettings):
     records_row_threshold: int = Field(default=900, ge=1)
 
     # --- Stockage local ----------------------------------------------------
-    raw_dir: Path = Path("data/raw")
+    #: Couche bronze : un Parquet immuable par exécution, fidèle à la source.
+    #: Les couches silver et gold vivent dans DuckDB et sont construites par dbt.
+    bronze_dir: Path = Path("data/bronze")
     duckdb_path: Path = Path("data/warehouse/eco2mix.duckdb")
+
+    #: Rapports PDF générés à la demande (DAG `eco2mix_monthly_report`).
+    reports_dir: Path = Path("data/reports")
 
     #: Backend de chargement. `bigquery` sera ajouté lors de la migration cloud ;
     #: c'est le seul endroit du code où le moteur est nommé.
     warehouse_backend: Literal["duckdb"] = "duckdb"
 
+    # --- Fenêtre de consolidation -----------------------------------------
+    #: Profondeur relue à chaque run mensuel. 24 mois par défaut : RTE publie le
+    #: consolidé avec plusieurs mois de retard, puis rejoue une année entière
+    #: quand elle passe en « définitives ». Le MERGE rend ce recouvrement gratuit.
+    consolidation_lookback_months: int = Field(default=24, ge=1)
+
     # --- Qualité -----------------------------------------------------------
     freshness_max_lag_hours: int = Field(default=2, ge=1)
 
-    @property
-    def table_name(self) -> str:
-        """Nom de table warehouse dérivé du dataset (`eco2mix-national-tr` -> `national_tr`)."""
-        return self.dataset_id.removeprefix("eco2mix-").replace("-", "_")
-
-    @property
-    def raw_dataset_dir(self) -> Path:
-        """Racine des partitions Parquet du dataset (`data/raw/eco2mix_national_tr`)."""
-        return self.raw_dir / self.dataset_id.replace("-", "_")
+    #: Part minimale des pas de temps attendus pour valider un mois consolidé.
+    consolidation_min_coverage: float = Field(default=0.95, gt=0, le=1)
 
 
 @lru_cache(maxsize=1)

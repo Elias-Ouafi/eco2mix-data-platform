@@ -10,6 +10,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from ingestion.config import Settings
+from ingestion.datasets import NATIONAL_CONS_DEF, NATIONAL_TR
 from ingestion.pipeline import (
     StaleDataError,
     check_freshness,
@@ -41,7 +42,7 @@ def test_extract_writes_a_partitioned_parquet(
     path = Path(outcome.parquet_path)
     assert path.exists()
     assert path.parent.name == "ingest_date=2026-09-07"
-    assert path.parent.parent == settings.raw_dataset_dir
+    assert path.parent.parent == NATIONAL_TR.bronze_dataset_dir(settings.bronze_dir)
     assert outcome.rows == 2
     # Une fenêtre horaire coûte un seul appel : c'est la base du calcul de quota.
     assert outcome.api_calls == 1
@@ -85,6 +86,25 @@ def test_ingestion_is_idempotent_end_to_end(
     try:
         assert loader.row_count() == 2
         assert loader.latest_timestamp() == datetime(2026, 9, 7, 3, 15, tzinfo=UTC)
+    finally:
+        loader.close()
+
+
+def test_loading_one_dataset_creates_every_bronze_table(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+    records_payload: dict[str, Any],
+) -> None:
+    """Au premier run horaire, la table du consolidé doit exister (vide) pour dbt."""
+    httpx_mock.add_response(json=records_payload)
+
+    run_ingestion(settings=settings, now=NOW)
+
+    loader = build_loader(settings, spec=NATIONAL_CONS_DEF, read_only=True)
+    try:
+        assert loader.row_count() == 0
+        assert loader.qualified_table == "bronze.national_cons_def"
+        assert loader._table_exists()
     finally:
         loader.close()
 

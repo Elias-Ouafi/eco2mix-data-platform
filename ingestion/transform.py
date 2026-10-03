@@ -7,9 +7,9 @@ testables sans réseau :
    (`2026-03-29T01:45:00+01:00`), soit en heure locale naïve
    (`2026-03-29 01:45:00`) selon le typage du champ côté Opendatasoft. Les deux
    formes sont acceptées et ramenées en UTC, y compris aux changements d'heure.
-2. **Typage.** Un schéma pyarrow explicite : le Parquet produit a toujours les
-   mêmes colonnes et les mêmes types, que l'API renvoie des entiers, des
-   chaînes (cas de l'export CSV) ou des valeurs nulles.
+2. **Typage.** Le schéma pyarrow du `DatasetSpec` fait foi : le Parquet produit a
+   toujours les mêmes colonnes et les mêmes types, que l'API renvoie des entiers,
+   des chaînes (cas de l'export CSV) ou des valeurs nulles.
 """
 
 from __future__ import annotations
@@ -25,53 +25,12 @@ from zoneinfo import ZoneInfo
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ingestion.datasets import INGESTED_AT_COLUMN, KEY_COLUMN, SOURCE_COLUMN, DatasetSpec
+
 logger = logging.getLogger(__name__)
 
 #: Fuseau de publication de RTE. Les horodatages naïfs sont exprimés dans ce fuseau.
 PARIS_TZ = ZoneInfo("Europe/Paris")
-
-#: Colonne clé, utilisée comme clé de MERGE dans le warehouse.
-KEY_COLUMN = "date_heure"
-
-#: Colonnes descriptives (chaînes).
-LABEL_COLUMNS: tuple[str, ...] = ("perimetre", "nature")
-
-#: Mesures. Typées `float64` et non `int64` : l'API renvoie des valeurs nulles
-#: sur les filières non renseignées et des chaînes via l'export CSV.
-MEASURE_COLUMNS: tuple[str, ...] = (
-    "consommation",
-    "prevision_j1",
-    "prevision_j",
-    "fioul",
-    "charbon",
-    "gaz",
-    "nucleaire",
-    "eolien",
-    "solaire",
-    "hydraulique",
-    "pompage",
-    "bioenergies",
-    "ech_physiques",
-    "taux_co2",
-    "ech_comm_angleterre",
-    "ech_comm_espagne",
-    "ech_comm_italie",
-    "ech_comm_suisse",
-    "ech_comm_allemagne_belgique",
-)
-
-#: Schéma du Parquet brut. `ingested_at_utc` arbitre les révisions successives
-#: d'un même `date_heure`, `source_dataset` prépare la cohabitation de plusieurs
-#: datasets éCO2mix dans la même zone `raw/`.
-RAW_SCHEMA = pa.schema(
-    [pa.field(KEY_COLUMN, pa.timestamp("us", tz="UTC"), nullable=False)]
-    + [pa.field(name, pa.string()) for name in LABEL_COLUMNS]
-    + [pa.field(name, pa.float64()) for name in MEASURE_COLUMNS]
-    + [
-        pa.field("ingested_at_utc", pa.timestamp("us", tz="UTC"), nullable=False),
-        pa.field("source_dataset", pa.string(), nullable=False),
-    ]
-)
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -142,8 +101,14 @@ def normalize_datetimes(raw_values: Iterable[str]) -> list[datetime]:
     return instants
 
 
-def _coerce_float(value: Any) -> float | None:
-    """Ramène une mesure à `float | None` (l'export CSV renvoie des chaînes)."""
+def _coerce_float(value: Any, *, column: str = "") -> float | None:
+    """Ramène une mesure à `float | None`.
+
+    L'export CSV renvoie des chaînes, et ODRÉ type même certaines colonnes
+    numériques en `text` (`gaz_cogen`, `ech_comm_allemagne_belgique`). Une valeur
+    illisible devient `null` avec un avertissement : elle ne doit ni casser un
+    chargement mensuel de dizaines de milliers de lignes, ni passer inaperçue.
+    """
     if value is None:
         return None
     if isinstance(value, bool):  # garde-fou : un booléen n'est pas une mesure
@@ -153,7 +118,11 @@ def _coerce_float(value: Any) -> float | None:
     text = str(value).strip()
     if not text:
         return None
-    return float(text)
+    try:
+        return float(text)
+    except ValueError:
+        logger.warning("valeur non numerique ignoree colonne=%s valeur=%r", column, text)
+        return None
 
 
 def _coerce_str(value: Any) -> str | None:
@@ -166,13 +135,13 @@ def _coerce_str(value: Any) -> str | None:
 def records_to_table(
     records: Sequence[dict[str, Any]],
     *,
-    dataset_id: str,
+    spec: DatasetSpec,
     ingested_at: datetime,
 ) -> pa.Table:
     """Construit la table pyarrow typée à partir des enregistrements bruts.
 
     Les enregistrements sans `date_heure` sont écartés (avec un avertissement) :
-    ils ne peuvent pas participer au MERGE. Les colonnes du schéma absentes de la
+    ils ne peuvent pas participer au MERGE. Les colonnes du spec absentes de la
     réponse sont créées à `null` et signalées — c'est le garde-fou contre un
     renommage de champ côté ODRÉ.
     """
@@ -186,21 +155,21 @@ def records_to_table(
 
     if usable:
         seen: set[str] = set().union(*(set(r.keys()) for r in usable))
-        technical = {"ingested_at_utc", "source_dataset"}
-        if missing := sorted(set(RAW_SCHEMA.names) - seen - technical):
+        technical = {INGESTED_AT_COLUMN, SOURCE_COLUMN}
+        if missing := sorted(set(spec.schema.names) - seen - technical):
             logger.warning("colonnes absentes de la reponse API, remplies a null : %s", missing)
 
     columns: dict[str, list[Any]] = {
         KEY_COLUMN: normalize_datetimes(str(r[KEY_COLUMN]) for r in usable),
     }
-    for name in LABEL_COLUMNS:
+    for name in spec.label_columns:
         columns[name] = [_coerce_str(r.get(name)) for r in usable]
-    for name in MEASURE_COLUMNS:
-        columns[name] = [_coerce_float(r.get(name)) for r in usable]
-    columns["ingested_at_utc"] = [ingested_at_utc] * len(usable)
-    columns["source_dataset"] = [dataset_id] * len(usable)
+    for name in spec.measure_columns:
+        columns[name] = [_coerce_float(r.get(name), column=name) for r in usable]
+    columns[INGESTED_AT_COLUMN] = [ingested_at_utc] * len(usable)
+    columns[SOURCE_COLUMN] = [spec.dataset_id] * len(usable)
 
-    table = pa.table(columns, schema=RAW_SCHEMA)
+    table = pa.table(columns, schema=spec.schema)
     return table.sort_by(KEY_COLUMN)
 
 
@@ -215,12 +184,12 @@ def _safe_run_id(run_id: str) -> str:
 def write_parquet(
     table: pa.Table,
     *,
-    raw_dataset_dir: Path,
+    dataset_dir: Path,
     run_id: str,
     ingest_date: date,
 ) -> Path:
-    """Écrit la table dans `<raw_dataset_dir>/ingest_date=YYYY-MM-DD/part-<run_id>.parquet`."""
-    partition = raw_dataset_dir / f"ingest_date={ingest_date.isoformat()}"
+    """Écrit la table dans `<dataset_dir>/ingest_date=YYYY-MM-DD/part-<run_id>.parquet`."""
+    partition = dataset_dir / f"ingest_date={ingest_date.isoformat()}"
     partition.mkdir(parents=True, exist_ok=True)
     path = partition / f"part-{_safe_run_id(run_id)}.parquet"
     pq.write_table(table, path, compression="zstd")

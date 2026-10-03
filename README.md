@@ -1,76 +1,94 @@
 # eco2mix-data-platform
 
-Socle d'ingestion des données **éCO2mix** de RTE (mix électrique français), exposées par la
-plateforme **ODRÉ** via l'API Opendatasoft Explore v2.1.
+Plateforme de données **éCO2mix** de RTE (mix électrique français), exposées par la
+plateforme **ODRÉ** via l'API Opendatasoft Explore v2.1, organisée en **architecture
+médaillon** (bronze → silver → gold).
 
-Le pipeline extrait le dataset national temps réel, le normalise en UTC, l'écrit en Parquet
-partitionné, puis le fusionne dans un warehouse **DuckDB** — le tout orchestré par **Airflow**
-(Astro CLI) et exécuté **100 % en local**, sans aucun service cloud.
+Le pipeline extrait les datasets nationaux temps réel et consolidé/définitif ainsi que le
+calendrier **Tempo** de RTE, les dépose en Parquet immuable (bronze), puis **dbt** les nettoie
+et les unifie (silver) avant de produire les tables métier (gold) — le tout dans **DuckDB**,
+orchestré par **Airflow** (Astro CLI) et exécuté **100 % en local**, sans aucun service cloud.
+
+À la demande, un **rapport PDF mensuel** destiné aux particuliers en tire les pics de carbone
+et les meilleurs créneaux pour consommer selon le tarif Tempo (voir
+[Rapport mensuel](#rapport-mensuel--pics-de-carbone-et-créneaux-tempo)).
 
 L'objectif est un socle de qualité production : ingestion idempotente, gestion explicite des
 changements d'heure, quota d'API suivi et documenté, tests sans réseau, CI sur runner nu.
 
 ---
 
-## Architecture
+## Architecture médaillon
 
 ```mermaid
 flowchart LR
-    ODRE[("API ODRÉ<br/>eco2mix-national-tr")]
+    ODRE[("API ODRÉ<br/>national-tr · national-cons-def")]
+    RTE[("API RTE<br/>calendrier Tempo")]
 
-    subgraph LOCAL["Socle local — en place"]
-        direction LR
-        EXTRACT["<b>extract_odre.py</b><br/>httpx + tenacity<br/>/records ou /exports/csv"]
-        TRANSFORM["<b>transform.py</b><br/>UTC + schéma pyarrow"]
-        RAW[("<b>data/raw/</b><br/>Parquet<br/>ingest_date=YYYY-MM-DD")]
-        LOADER["<b>WarehouseLoader</b><br/>MERGE sur date_heure"]
-        DUCK[("<b>DuckDB</b><br/>raw.national_tr")]
-        CHECK{{"<b>freshness_check</b><br/>retard &lt; 2 h"}}
+    subgraph BRONZE["Bronze — fidèle à la source (Python)"]
+        direction TB
+        PARQUET[("<b>data/bronze/</b><br/>Parquet immuables<br/>ingest_date=YYYY-MM-DD")]
+        BTABLES[("<b>bronze.national_tr</b><br/><b>bronze.national_cons_def</b><br/><b>bronze.rte_tempo</b><br/>MERGE sur date_heure")]
+        PARQUET --> BTABLES
     end
 
-    subgraph CLOUD["Cible cloud — migration prévue"]
-        direction LR
-        GCS[("GCS<br/>bucket raw")]
-        BQ[("BigQuery<br/>raw.national_tr")]
-        DBT["dbt<br/>staging + marts"]
+    subgraph SILVER["Silver — nettoyé, conforme (dbt)"]
+        direction TB
+        STR["silver.national_tr<br/>silver.national_cons_def<br/>silver.tempo_jours"]
+        MIX["<b>silver.mix_unifie</b><br/>consolidé puis temps réel"]
+        STR --> MIX
     end
 
-    ODRE --> EXTRACT --> TRANSFORM --> RAW --> LOADER --> DUCK --> CHECK
-    RAW -.-> GCS
-    LOADER -.->|"BigQueryLoader<br/>même interface"| BQ
-    GCS -.-> BQ -.-> DBT
+    subgraph GOLD["Gold — métier (dbt)"]
+        direction TB
+        FCT["<b>gold.fct_mix</b><br/>gold.fct_production_filiere<br/>gold.fct_mix_journalier<br/><b>gold.fct_creneau_horaire</b><br/>gold.dim_filiere · gold.tarifs_tempo"]
+    end
 
-    classDef future fill:#f4f4f5,stroke:#a1a1aa,color:#71717a,stroke-dasharray:5 4
-    class GCS,BQ,DBT future
-    style CLOUD fill:#fafafa,stroke:#d4d4d8,color:#71717a,stroke-dasharray:5 4
+    ODRE -->|"extract_odre.py<br/>transform.py"| PARQUET
+    RTE -->|"extract_rte.py<br/>OAuth2"| PARQUET
+    BTABLES --> STR
+    MIX --> FCT
+    STR --> FCT
+    FCT --> PDF(["<b>Rapport PDF mensuel</b><br/>reporting/"])
+    FCT --> USE(["Dashboard · analyses"])
 ```
 
-Le pipeline Airflow, en clair :
+| Couche | Où | Construite par | Contenu | Règle |
+|---|---|---|---|---|
+| **Bronze** | `data/bronze/*.parquet` + schéma `bronze` | `ingestion/` (Python) | Une table par dataset ODRÉ, colonnes de la source, horodatage en UTC | Jamais de règle métier. Les Parquet gardent **toutes** les révisions ; les tables, la dernière version de chaque pas de temps |
+| **Silver** | schéma `silver` | `dbt/models/silver/` | Une ligne = une mesure réelle ; qualité (`temps_reel` / `consolidee` / `definitive`) et pas de temps explicites ; série unifiée | Nettoyage et conformité, pas d'agrégat |
+| **Gold** | schéma `gold` | `dbt/models/gold/` | Faits au pas de mesure et au jour, production par filière, référentiel des filières | Prêt à consommer : unités dans les noms de colonnes, regroupements issus de `dim_filiere` |
+
+Les pipelines Airflow, en clair :
 
 ```
-extract  ──►  load_raw  ──►  dbt_build  ──►  freshness_check
-   │             │            (placeholder)        │
-   │             └── pool duckdb_writer ───────────┘
-   └── 1 appel API par run
+eco2mix_hourly_ingest          extract ──► load_bronze ──► dbt_build ──► freshness_check
+eco2mix_monthly_consolidation  extract ──► load_bronze ──► dbt_build ──► coverage_check
+eco2mix_monthly_report         resolve_month ──► extract_tempo ──► load_tempo ──► dbt_build ──► generate_report
+  (manuel, sans planification)
+
+load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 slot).
 ```
 
-### Ce qui est en place
+### Composants
 
 | Composant | Fichier | Rôle |
 |---|---|---|
+| Datasets | [`ingestion/datasets.py`](ingestion/datasets.py) | `DatasetSpec` : identifiant ODRÉ, table bronze et schéma de chaque dataset |
 | Client API | [`ingestion/extract_odre.py`](ingestion/extract_odre.py) | Fenêtre paramétrable, bascule `/records` ↔ `/exports/csv`, retry exponentiel, comptage du quota |
-| Normalisation | [`ingestion/transform.py`](ingestion/transform.py) | `date_heure` → UTC (changements d'heure gérés), schéma pyarrow, écriture Parquet |
-| Warehouse | [`ingestion/warehouse.py`](ingestion/warehouse.py) | Interface `WarehouseLoader` + `DuckDBLoader` (MERGE sur `date_heure`) |
-| Étapes métier | [`ingestion/pipeline.py`](ingestion/pipeline.py) | `extract` / `load` / `freshness`, appelables par le DAG **et** par la CLI |
-| Orchestration | [`airflow/dags/eco2mix_hourly_ingest.py`](airflow/dags/eco2mix_hourly_ingest.py) | DAG `@hourly`, `catchup=False`, pool `duckdb_writer` |
+| Client Tempo | [`ingestion/extract_rte.py`](ingestion/extract_rte.py) | API RTE en OAuth2 (jeton réutilisé), plages découpées par an, dates futures tronquées |
+| Normalisation | [`ingestion/transform.py`](ingestion/transform.py) | `date_heure` → UTC (changements d'heure gérés), schéma pyarrow, écriture Parquet bronze |
+| Warehouse | [`ingestion/warehouse.py`](ingestion/warehouse.py) | Interface `WarehouseLoader` + `DuckDBLoader` (MERGE sur `date_heure` dans `bronze`) |
+| Étapes métier | [`ingestion/pipeline.py`](ingestion/pipeline.py) | `extract` / `load` / `freshness` / `coverage`, appelables par les DAGs **et** par la CLI |
+| Silver + gold | [`dbt/`](dbt/) | Modèles, référentiel `dim_filiere`, tests de données ([détail](dbt/README.md)) |
+| Rapport | [`reporting/`](reporting/) | Chiffres du mois (`data.py`), graphiques (`charts.py`), mise en page PDF (`pdf.py`) |
+| Orchestration | [`airflow/dags/`](airflow/dags/) | DAG horaire (temps réel), mensuel (consolidé) et rapport à la demande, pool `duckdb_writer` |
 
 ### Hors périmètre de cette itération
 
-Les emplacements existent, le contenu viendra :
-
-- `dbt/` — modèles staging + marts (la tâche `dbt_build` est un `EmptyOperator`) ;
-- `infra/` — Terraform GCP pour la cible cloud ;
-- DAG de consolidation mensuelle (dataset définitif `eco2mix-national-cons-def`).
+- Dashboard (lira uniquement les tables `gold`) ;
+- envoi automatique des rapports (email) et rapports personnalisés par utilisateur ;
+- `infra/` — Terraform GCP, pour une migration cloud ultérieure (voir plus bas).
 
 ---
 
@@ -84,20 +102,34 @@ Les emplacements existent, le contenu viendra :
 ### Socle Python
 
 ```bash
-uv sync --group dev
+uv sync --group dev --group dbt --group report
 cp .env.example .env
 ```
 
-Un run complet à la main, sans Airflow :
+Un run complet à la main, sans Airflow — bronze, puis silver et gold :
 
 ```bash
 uv run python -m ingestion.cli ingest
+uv run python -m ingestion.cli consolidate
+uv run dbt build --project-dir dbt --profiles-dir dbt
 ```
+
+Puis, pour un rapport mensuel (le calendrier Tempo exige des identifiants RTE, voir
+[plus bas](#calendrier-tempo--identifiants-rte)) :
+
+```bash
+uv run python -m ingestion.cli tempo --month 2026-09
+uv run dbt build --project-dir dbt --profiles-dir dbt
+uv run python -m ingestion.cli report --month 2026-09
+```
+
+`dbt build` se lance depuis la racine du dépôt : `dbt/profiles.yml` lit
+`ECO2MIX_DUCKDB_PATH`, avec le même défaut que le package Python.
 
 Vérification du résultat (critère de recette) :
 
 ```bash
-duckdb data/warehouse/eco2mix.duckdb "SELECT count(*) AS lignes, count(DISTINCT date_heure) AS cles, max(date_heure) AS derniere FROM raw.national_tr"
+duckdb data/warehouse/eco2mix.duckdb "SELECT count(*) AS lignes, count(DISTINCT date_heure) AS cles, max(date_heure) AS derniere FROM bronze.national_tr"
 ```
 
 `lignes` et `cles` doivent être **égaux** : c'est la preuve qu'aucun doublon n'a été créé.
@@ -113,12 +145,18 @@ astro dev start
 L'UI est sur <http://localhost:8080> (`admin` / `admin`). Le DAG `eco2mix_hourly_ingest`
 apparaît activé ; `astro dev stop` arrête la stack.
 
-`docker-compose.override.yml` monte deux volumes dans les conteneurs :
+`docker-compose.override.yml` monte trois volumes dans les conteneurs :
 
 | Hôte | Conteneur | Mode |
 |---|---|---|
 | `ingestion/` | `/usr/local/airflow/ingestion` | lecture seule |
+| `reporting/` | `/usr/local/airflow/reporting` | lecture seule |
+| `dbt/` | `/usr/local/airflow/dbt` | lecture seule (artefacts dbt dans `/tmp/dbt`) |
 | `data/` | `/usr/local/airflow/data` | lecture-écriture |
+
+dbt est installé dans un environnement virtuel dédié de l'image
+(`/usr/local/airflow/dbt_venv`, voir [`airflow/Dockerfile`](airflow/Dockerfile)) : ses
+dépendances épinglées entrent en conflit avec celles d'Airflow.
 
 Le contexte de build Docker d'Astro se limite au dossier `airflow/`, il ne peut donc pas
 copier `../ingestion` : le code est monté à l'exécution et `PYTHONPATH=/usr/local/airflow`
@@ -137,7 +175,8 @@ uv run pytest
 
 ## Modèle de données
 
-Table `raw.national_tr` (DuckDB), clé primaire `date_heure` :
+Table bronze `bronze.national_tr` (DuckDB), clé primaire `date_heure` — `bronze.national_cons_def`
+suit le même schéma, enrichi du détail par sous-filière (`gaz_ccg`, `hydraulique_lacs`, …) :
 
 | Colonne | Type | Commentaire |
 |---|---|---|
@@ -226,6 +265,53 @@ La bascule vers `/exports/csv` est automatique — un seul appel API pour l'ann�
 
 ---
 
+## Rapport mensuel : pics de carbone et créneaux Tempo
+
+Un PDF de 3 à 4 pages pour un particulier au tarif Tempo, généré **à la demande** pour un mois
+civil. Il ne recalcule aucune règle métier : tout vient de `gold.fct_creneau_horaire` (une
+ligne par heure : intensité CO₂, couleur Tempo, période tarifaire, prix TTC).
+
+| Section | Contenu |
+|---|---|
+| En bref | Intensité CO₂ moyenne, heure la plus propre, pic maximal, jours rouges/blancs/bleus, meilleur créneau, économie estimée |
+| 1. Pics de carbone | Courbe horaire, seuil de pic (9e décile du mois), épisodes les plus intenses, jours les plus carbonés, carte jour × heure |
+| 2. Calendrier Tempo et prix | Calendrier coloré du mois, jours rouges, prix et CO₂ moyens par couleur × période |
+| 3. Meilleurs créneaux | Profil horaire CO₂ / prix, 5 créneaux de 3 h à privilégier, 3 à éviter, économie en déplaçant un usage flexible (7 kWh/jour par défaut) |
+| Méthodologie | Définitions, sources, limites |
+
+### Le déclencher
+
+Dans l'UI Airflow, **Trigger DAG w/ config** sur `eco2mix_monthly_report` :
+
+```json
+{"mois": "2026-09", "tempo": true, "heures_creneau": 3, "usage_flexible_kwh": 7}
+```
+
+Sans `mois`, le rapport porte sur le mois précédent. Le PDF est écrit dans
+`data/reports/eco2mix_rapport_AAAA-MM.pdf` et son chemin est remonté en XCom.
+
+### Calendrier Tempo : identifiants RTE
+
+La couleur des jours vient de l'API RTE « Tempo Like Supply Contract », gratuite mais
+authentifiée :
+
+1. créer un compte sur [data.rte-france.com](https://data.rte-france.com) ;
+2. s'abonner à l'API *Tempo Like Supply Contract* et créer une application ;
+3. reporter ses identifiants dans `airflow/.env` (et `.env` pour la CLI) :
+   `ECO2MIX_RTE_CLIENT_ID=...` et `ECO2MIX_RTE_CLIENT_SECRET=...`.
+
+Sans identifiants, `extract_tempo` échoue avec un message explicite. Avec `"tempo": false`, le
+rapport est produit sur le seul critère carbone et le signale en tête de document.
+
+### Grille tarifaire
+
+Les prix TTC du kWh Tempo sont dans le seed [`dbt/seeds/tarifs_tempo.csv`](dbt/seeds/tarifs_tempo.csv)
+(grilles du 1er février et du 1er août 2026). **Ils doivent être mis à jour à chaque mouvement
+tarifaire** (en général 1er février et 1er août) : hors grille, les prix restent nuls et le
+rapport bascule sur le critère carbone plutôt que d'afficher un prix faux.
+
+---
+
 ## Contrôle de fraîcheur
 
 La dernière tâche du DAG lit DuckDB **en lecture seule** et échoue si la donnée la plus récente
@@ -251,7 +337,7 @@ DuckDB n'accepte **qu'un seul writer** sur un fichier, et refuse un lecteur exte
 writer détient le verrou. Trois garde-fous :
 
 1. `max_active_runs=1` — jamais deux runs du DAG en parallèle ;
-2. pool Airflow **`duckdb_writer` (1 slot)** sur `load_raw` et `freshness_check` — la
+2. pool Airflow **`duckdb_writer` (1 slot)** sur `load_bronze`, `dbt_build` et les contrôles — la
    sérialisation tient même si un autre DAG venait à écrire dans la base ;
 3. connexion `read_only=True` pour le contrôle de fraîcheur.
 
@@ -271,7 +357,13 @@ uv run pytest
 | [`test_extract_odre.py`](ingestion/tests/test_extract_odre.py) | Pagination, bascule vers l'export, retry, non-rejeu des 4xx, comptage du quota |
 | [`test_transform.py`](ingestion/tests/test_transform.py) | Changements d'heure de mars et d'octobre, typage, partitionnement |
 | [`test_warehouse.py`](ingestion/tests/test_warehouse.py) | Idempotence du MERGE, révisions, dédoublonnage, clé primaire |
-| [`test_pipeline.py`](ingestion/tests/test_pipeline.py) | Bout-en-bout API simulée → Parquet → DuckDB, contrôle de fraîcheur |
+| [`test_pipeline.py`](ingestion/tests/test_pipeline.py) | Bout-en-bout API simulée → Parquet → DuckDB, contrôles de fraîcheur et de complétude |
+| [`test_extract_rte.py`](ingestion/tests/test_extract_rte.py) | Jeton OAuth (Basic, réutilisé), découpage des plages, dates futures, retry, couleurs inconnues |
+| [`test_report.py`](ingestion/tests/test_report.py) | Épisodes de pic, meilleur créneau bleu HC, économie estimée, repli sans prix, PDF écrit |
+| [`test_dbt.py`](ingestion/tests/test_dbt.py) | `dbt build` de bronze à gold : lignes vides écartées, bascule consolidé → temps réel sans double comptage, jour de 25 h, premier run sans consolidé |
+
+Les 56 tests de données dbt (unicité, valeurs admises, bornes, intégrité référentielle, absence
+de chevauchement entre mesures) tournent à chaque `dbt build`, donc à chaque run des DAGs.
 
 **Aucun test n'appelle l'API réelle** : `pytest-httpx` intercepte au niveau du transport, et un
 test condamne explicitement les sockets pour le prouver. DuckDB tourne en mémoire.
@@ -279,8 +371,9 @@ test condamne explicitement les sockets pour le prouver. DuckDB tourne en mémoi
 La CI GitHub Actions ([`ci.yml`](.github/workflows/ci.yml)) tourne sur un runner nu, **sans
 aucun credential** :
 
-- `ruff check` + `ruff format --check` + `pytest` ;
-- import du `DagBag` avec Airflow 2.10 — les erreurs d'import du DAG sont détectées sans Docker.
+- `ruff check` + `ruff format --check` + `pytest`, `dbt build` compris ;
+- import du `DagBag` avec Airflow 2.10 — les erreurs d'import des deux DAGs, leurs tâches et
+  l'usage du pool `duckdb_writer` sont vérifiés sans Docker.
 
 ---
 
@@ -300,7 +393,7 @@ Mesurés lors du premier run de validation contre l'API (2026-09-08, fenêtre d'
 
 | Indicateur | Valeur |
 |---|---|
-| Lignes en base (`raw.national_tr`) | _à compléter_ |
+| Lignes en base (`bronze.national_tr`) | _à compléter_ |
 | Profondeur d'historique | _à compléter_ |
 | Taille d'une partition Parquet quotidienne | _à compléter_ |
 | Appels API consommés sur 30 jours | _à compléter_ (budget : ~880) |
@@ -308,7 +401,9 @@ Mesurés lors du premier run de validation contre l'API (2026-09-08, fenêtre d'
 
 ---
 
-## Migration BigQuery prévue
+## Migration BigQuery (ultérieure)
+
+Hors périmètre actuel : la plateforme reste 100 % locale. Le code est néanmoins prêt.
 
 Aucune logique métier ne dépend de DuckDB. Le contrat est
 [`WarehouseLoader`](ingestion/warehouse.py) — un `Protocol` volontairement aligné sur ce que
@@ -319,7 +414,7 @@ La migration se limite donc à :
 
 1. écrire `BigQueryLoader` (`MERGE` natif, source `gs://.../*.parquet`) ;
 2. l'enregistrer dans `build_loader()` — seul endroit du code où un moteur est nommé ;
-3. basculer `ECO2MIX_WAREHOUSE_BACKEND=bigquery` et faire pointer la zone raw sur GCS ;
+3. basculer `ECO2MIX_WAREHOUSE_BACKEND=bigquery` et faire pointer la couche bronze sur GCS ;
 4. provisionner le tout depuis `infra/`.
 
 Le DAG, le client API et la normalisation restent inchangés.
@@ -330,11 +425,12 @@ Le DAG, le client API et la normalisation restent inchangés.
 
 ```
 eco2mix-data-platform/
-├── ingestion/              # client API, normalisation, warehouse, CLI
+├── ingestion/              # clients API (ODRÉ, RTE), normalisation, warehouse, CLI
 │   └── tests/              # pytest — aucun appel réseau
+├── reporting/              # rapport PDF mensuel (matplotlib + reportlab)
 ├── airflow/                # projet Astro (Airflow 2.10, Python 3.12)
-│   └── dags/               # eco2mix_hourly_ingest
-├── dbt/                    # à venir : staging + marts
+│   └── dags/               # ingestion horaire, consolidation mensuelle, rapport à la demande
+├── dbt/                    # couches silver et gold (dbt-duckdb)
 ├── infra/                  # à venir : Terraform GCP
 ├── data/                   # gitignoré — voir data/README.md
 └── .github/workflows/      # CI : ruff, pytest, import du DagBag
