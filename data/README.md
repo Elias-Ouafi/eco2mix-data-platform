@@ -11,11 +11,18 @@ data/
 │   ├── eco2mix_national_tr/
 │   │   └── ingest_date=YYYY-MM-DD/        # partition = date d'ingestion (UTC)
 │   │       └── part-<run_id>.parquet      # un fichier par exécution
-│   └── eco2mix_national_cons_def/
+│   ├── eco2mix_national_cons_def/
+│   │   └── ingest_date=YYYY-MM-DD/
+│   │       └── part-<run_id>.parquet
+│   └── rte_tempo/                         # calendrier Tempo (API RTE)
 │       └── ingest_date=YYYY-MM-DD/
 │           └── part-<run_id>.parquet
-└── warehouse/
-    └── eco2mix.duckdb                     # schémas bronze, silver, gold
+├── warehouse/
+│   └── eco2mix.duckdb                     # schémas bronze, silver, gold
+└── reports/                               # rapports mensuels générés à la demande
+    ├── eco2mix_rapport_AAAA-MM.pdf
+    ├── eco2mix_rapport_AAAA-MM.md
+    └── eco2mix_rapport_AAAA-MM_graphiques/  # images PNG du rapport Markdown
 ```
 
 ## Les trois couches
@@ -26,6 +33,7 @@ data/
 | Bronze | `eco2mix.duckdb` → schéma `bronze` | `ingestion` (Python) | MERGE sur `date_heure` |
 | Silver | `eco2mix.duckdb` → schéma `silver` | dbt | reconstruite à chaque run |
 | Gold | `eco2mix.duckdb` → schéma `gold` | dbt | reconstruite à chaque run |
+| Rapports | `reports/` | `reporting` (Python) | lecture seule de gold, un fichier par mois demandé |
 
 ### `bronze/` — zone d'atterrissage immuable
 
@@ -75,6 +83,13 @@ Si vous aviez lancé une version antérieure du pipeline, les dossiers `data/raw
 
 ## Volumétrie indicative
 
-Au pas 15 minutes, le dataset temps réel représente environ 35 000 lignes par an ; le consolidé
-(depuis 2012) environ 500 000 lignes au total. L'ensemble tient en quelques dizaines de
-mégaoctets : la reconstruction complète de silver et gold prend quelques secondes.
+Mesuré sur l'historique complet (2012 → aujourd'hui, chargé le 2026-10-04) :
+
+| Élément | Volume |
+|---|---|
+| Consolidé/définitif en bronze | 508 260 lignes, Parquet de 14 Mo (un seul fichier d'export) |
+| Temps réel en bronze | ~35 000 lignes par an (l'API n'en garde qu'environ 96 jours) |
+| Base `eco2mix.duckdb` (bronze + silver + gold) | 139 Mo |
+| Reconstruction complète de silver et gold (`dbt build`) | ~22 s |
+
+L'ensemble tient largement en local.

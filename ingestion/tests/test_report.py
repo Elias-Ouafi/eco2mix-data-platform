@@ -119,6 +119,79 @@ def test_pdf_is_written_for_a_month_without_data(medallion_db: Path, tmp_path: P
     assert chemin.read_bytes().startswith(b"%PDF")
 
 
+# --- Markdown ------------------------------------------------------------------
+
+
+def test_markdown_report_carries_the_same_figures(medallion_db: Path, tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, duckdb_path=medallion_db, reports_dir=tmp_path)
+
+    chemin = generate_monthly_report(JUIN, settings=settings, format="md", now=NOW)
+
+    assert chemin == report_path(JUIN, settings=settings, format="md")
+    assert chemin.name == "eco2mix_rapport_2026-06.md"
+    texte = chemin.read_text(encoding="utf-8")
+    assert texte.startswith("# Électricité en France — juin 2026")
+    sections = (
+        "## En bref",
+        "## 1. Pics de carbone",
+        "## 2. Calendrier Tempo et prix",
+        "## 3. Les meilleurs créneaux pour consommer",
+        "## Méthodologie et sources",
+    )
+    assert all(section in texte for section in sections)
+    # Pic à 80 g/kWh, jour rouge, meilleur créneau bleu HC à 0,1325 €/kWh.
+    assert "80 g/kWh" in texte
+    assert "**Jours rouges :** mardi 30 juin." in texte
+    assert "| bleu | creuses |" in texte
+    assert "0,1325 €/kWh" in texte
+
+
+def test_markdown_charts_are_written_next_to_the_document(
+    medallion_db: Path, tmp_path: Path
+) -> None:
+    settings = Settings(_env_file=None, duckdb_path=medallion_db, reports_dir=tmp_path)
+
+    chemin = generate_monthly_report(JUIN, settings=settings, format="md", now=NOW)
+
+    dossier = tmp_path / "eco2mix_rapport_2026-06_graphiques"
+    images = sorted(p.name for p in dossier.glob("*.png"))
+    assert images == [
+        "calendrier_tempo.png",
+        "carte_chaleur.png",
+        "courbe_carbone.png",
+        "profil_horaire.png",
+    ]
+    texte = chemin.read_text(encoding="utf-8")
+    # Liens relatifs : le dossier se déplace avec le document.
+    assert "](eco2mix_rapport_2026-06_graphiques/courbe_carbone.png)" in texte
+    assert all((dossier / image).read_bytes().startswith(b"\x89PNG") for image in images)
+
+
+def test_markdown_without_charts_is_text_only(medallion_db: Path, tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, duckdb_path=medallion_db, reports_dir=tmp_path)
+
+    chemin = generate_monthly_report(
+        JUIN, settings=settings, format="md", graphiques=False, now=NOW
+    )
+
+    assert "![" not in chemin.read_text(encoding="utf-8")
+    assert not (tmp_path / "eco2mix_rapport_2026-06_graphiques").exists()
+
+
+def test_markdown_for_a_month_without_data(medallion_db: Path, tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, duckdb_path=medallion_db, reports_dir=tmp_path)
+
+    chemin = generate_monthly_report(date(2024, 1, 1), settings=settings, format="md", now=NOW)
+
+    assert "Aucune donnée éCO2mix disponible" in chemin.read_text(encoding="utf-8")
+
+
+def test_unknown_format_is_rejected(medallion_db: Path) -> None:
+    settings = Settings(_env_file=None, duckdb_path=medallion_db)
+    with pytest.raises(ValueError, match="format inconnu"):
+        generate_monthly_report(JUIN, settings=settings, format="docx")  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize("value", ["2026-13", "juin", "2026/06"])
 def test_invalid_month_is_rejected(value: str) -> None:
     with pytest.raises(ValueError, match="AAAA-MM"):
