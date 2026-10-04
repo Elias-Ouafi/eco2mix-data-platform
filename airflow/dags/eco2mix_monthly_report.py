@@ -3,7 +3,8 @@
 `resolve_month` -> `extract_tempo` -> `load_tempo` -> `dbt_build` -> `generate_report`
 
 DAG **sans planification** : il se déclenche depuis l'UI (« Trigger DAG w/ config »)
-avec le mois voulu. Le PDF est écrit dans `data/reports/eco2mix_rapport_AAAA-MM.pdf`.
+avec le mois voulu. Le rapport est écrit dans `data/reports/eco2mix_rapport_AAAA-MM.pdf`
+(ou `.md`).
 
 | Paramètre | Défaut | Rôle |
 |---|---|---|
@@ -11,6 +12,7 @@ avec le mois voulu. Le PDF est écrit dans `data/reports/eco2mix_rapport_AAAA-MM
 | `tempo` | `true` | Recharge le calendrier Tempo du mois depuis l'API RTE |
 | `heures_creneau` | `3` | Durée des créneaux recommandés |
 | `usage_flexible_kwh` | `7` | Consommation déplaçable par jour, pour l'estimation d'économie |
+| `format` | `pdf` | `pdf`, ou `md` pour un document Markdown (graphiques en PNG à côté) |
 
 * **Prix Tempo.** La couleur des jours vient de l'API RTE, qui exige des
   identifiants (`ECO2MIX_RTE_CLIENT_ID` / `ECO2MIX_RTE_CLIENT_SECRET`). Sans eux, la
@@ -65,6 +67,7 @@ DBT_BUILD_COMMAND = f"/usr/local/airflow/dbt_venv/bin/dbt build --project-dir {D
         "tempo": Param(True, type="boolean", description="Recharger le calendrier Tempo"),
         "heures_creneau": Param(3, type="integer", minimum=1, maximum=8),
         "usage_flexible_kwh": Param(7.0, type="number", minimum=0),
+        "format": Param("pdf", type="string", enum=["pdf", "md"], description="PDF ou Markdown"),
     },
     tags=["eco2mix", "rapport", "tempo"],
     doc_md=__doc__,
@@ -115,7 +118,11 @@ def eco2mix_monthly_report() -> None:
             heures_creneau=int(params["heures_creneau"]),
             usage_flexible_kwh=float(params["usage_flexible_kwh"]),
         )
-        return str(generate_monthly_report(date.fromisoformat(f"{month}-01"), options=options))
+        return str(
+            generate_monthly_report(
+                date.fromisoformat(f"{month}-01"), options=options, format=params["format"]
+            )
+        )
 
     month = resolve_month()
     load_tempo(extract_tempo(month)) >> dbt_build >> generate_report(month)

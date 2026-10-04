@@ -9,6 +9,7 @@
     python -m ingestion.cli coverage
     python -m ingestion.cli tempo --month 2026-09        # calendrier Tempo (API RTE)
     python -m ingestion.cli report --month 2026-09       # rapport PDF du mois
+    python -m ingestion.cli report --month 2026-09 --format md   # même rapport en Markdown
 
 Les mêmes fonctions sont appelées par les DAGs : ce qui tourne en production est
 exactement ce qui tourne à la main.
@@ -117,9 +118,15 @@ def build_parser() -> argparse.ArgumentParser:
     tempo.add_argument("--end", type=date.fromisoformat, help="dernier jour (exclu)")
     tempo.add_argument("--run-id", default="manual", help="suffixe du fichier Parquet")
 
-    report = subparsers.add_parser("report", help="génère le rapport PDF d'un mois")
+    report = subparsers.add_parser("report", help="génère le rapport d'un mois (PDF ou Markdown)")
     report.add_argument("--month", type=_parse_month, required=True, help="mois AAAA-MM")
-    report.add_argument("--output", help="chemin du PDF (défaut : data/reports/)")
+    report.add_argument("--format", choices=["pdf", "md"], default="pdf", help="format du rapport")
+    report.add_argument("--output", help="chemin du fichier (défaut : data/reports/)")
+    report.add_argument(
+        "--sans-graphiques",
+        action="store_true",
+        help="Markdown uniquement : texte et tableaux, sans images PNG",
+    )
     return parser
 
 
@@ -181,7 +188,13 @@ def main(argv: list[str] | None = None) -> int:
             from reporting.monthly import generate_monthly_report
 
             output = Path(args.output) if args.output else None
-            path = generate_monthly_report(args.month, settings=settings, output=output)
+            path = generate_monthly_report(
+                args.month,
+                settings=settings,
+                output=output,
+                format=args.format,
+                graphiques=not args.sans_graphiques,
+            )
             logger.info("rapport ecrit %s", path)
     return 0
 

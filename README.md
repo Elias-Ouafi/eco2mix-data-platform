@@ -9,7 +9,7 @@ calendrier **Tempo** de RTE, les dépose en Parquet immuable (bronze), puis **db
 et les unifie (silver) avant de produire les tables métier (gold) — le tout dans **DuckDB**,
 orchestré par **Airflow** (Astro CLI) et exécuté **100 % en local**, sans aucun service cloud.
 
-À la demande, un **rapport PDF mensuel** destiné aux particuliers en tire les pics de carbone
+À la demande, un **rapport mensuel** (PDF ou Markdown) destiné aux particuliers en tire les pics de carbone
 et les meilleurs créneaux pour consommer selon le tarif Tempo (voir
 [Rapport mensuel](#rapport-mensuel--pics-de-carbone-et-créneaux-tempo)).
 
@@ -49,8 +49,8 @@ flowchart LR
     BTABLES --> STR
     MIX --> FCT
     STR --> FCT
-    FCT --> PDF(["<b>Rapport PDF mensuel</b><br/>reporting/"])
-    FCT --> USE(["Dashboard · analyses"])
+    FCT --> RAPPORT(["<b>Rapport mensuel</b><br/>PDF · Markdown<br/>reporting/"])
+    FCT --> USE(["Analyses SQL<br/>(DuckDB)"])
 ```
 
 | Couche | Où | Construite par | Contenu | Règle |
@@ -84,11 +84,52 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 | Rapport | [`reporting/`](reporting/) | Chiffres du mois (`data.py`), graphiques (`charts.py`), mise en page PDF (`pdf.py`) |
 | Orchestration | [`airflow/dags/`](airflow/dags/) | DAG horaire (temps réel), mensuel (consolidé) et rapport à la demande, pool `duckdb_writer` |
 
-### Hors périmètre de cette itération
+### Hors périmètre
 
-- Dashboard (lira uniquement les tables `gold`) ;
+- **Site web ou dashboard public** : écarté volontairement. Le livrable visible est le rapport
+  mensuel, en PDF ou en Markdown ;
 - envoi automatique des rapports (email) et rapports personnalisés par utilisateur ;
 - `infra/` — Terraform GCP, pour une migration cloud ultérieure (voir plus bas).
+
+---
+
+## État d'avancement
+
+*Mis à jour le 4 octobre 2026.*
+
+**Objectif du MVP** : le pipeline tourne 7 jours sans intervention, le rapport mensuel sort avec
+les vrais prix Tempo, et ce README affiche des chiffres réels mesurés en exploitation.
+
+### Fait et testé
+
+| Brique | Vérifié par |
+|---|---|
+| Ingestion éCO2mix (temps réel, consolidé/définitif) : API ODRÉ → Parquet → DuckDB | Tests sans réseau ; exécutée contre l'API réelle |
+| Architecture médaillon : bronze (Python), silver et gold (dbt-duckdb) | 56 tests de données dbt, verts sur les données réelles |
+| Historique complet 2012 → aujourd'hui (2 appels API) | Série continue, bilans annuels conformes aux chiffres publiés par RTE |
+| Calendrier Tempo (API RTE, OAuth2) et grille tarifaire | Tests sur réponses simulées |
+| Rapport mensuel PDF et Markdown (`report --format pdf/md`) | Tests de bout en bout ; généré sur septembre 2026 réel, sans prix |
+| Trois DAGs Airflow (horaire, consolidation mensuelle, rapport à la demande) | Import et structure vérifiés en CI (Airflow 2.10) |
+| Qualité | 91 tests pytest, ruff, CI GitHub Actions verte |
+
+### Pas encore validé en conditions réelles
+
+- **Airflow n'a jamais tourné** : `astro dev start` n'a pas encore été lancé (Docker Desktop
+  manquait sur le poste de développement). Le projet Astro est prêt (`airflow/.astro/config.yaml`).
+- **Les prix Tempo n'ont jamais été calculés sur des données réelles** : il faut des identifiants
+  de l'API RTE. Le client n'est testé que sur des réponses simulées.
+- **La grille tarifaire** (`dbt/seeds/tarifs_tempo.csv`) a été relevée sur un comparateur ; elle
+  reste à vérifier sur la source officielle (EDF / CRE).
+
+### Reste à faire
+
+| # | Étape | Fini quand |
+|---|---|---|
+| 1 | Lancer la stack Airflow (`astro dev start`) | Le DAG horaire est vert plusieurs heures de suite et le DAG rapport produit un document depuis l'UI |
+| 2 | Brancher les prix Tempo réels (compte RTE, identifiants dans `airflow/.env`, grille vérifiée) | Le rapport de septembre affiche jours rouges et économie en euros |
+| 3 | Fiabilité : alerte en cas d'échec d'une tâche, `main` protégée (CI obligatoire) | Un échec simulé déclenche l'alerte |
+| 4 | Exploitation sur 7 jours, puis chiffres clés restants (appels API sur 30 jours, taux de succès) | Le tableau des [chiffres clés](#chiffres-clés) est complet |
+| 5 | Vitrine : exemple de rapport et captures des graphiques dans ce README | Le dépôt se comprend sans rien installer |
 
 ---
 
@@ -97,7 +138,8 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 ### Prérequis
 
 - Python 3.12, [uv](https://docs.astral.sh/uv/)
-- Docker + [Astro CLI](https://www.astronomer.io/docs/astro/cli/install-cli) (pour Airflow)
+- Docker Desktop (moteur WSL2 sous Windows) + [Astro CLI](https://www.astronomer.io/docs/astro/cli/install-cli)
+  (pour Airflow)
 
 ### Socle Python
 
@@ -120,7 +162,8 @@ Puis, pour un rapport mensuel (le calendrier Tempo exige des identifiants RTE, v
 ```bash
 uv run python -m ingestion.cli tempo --month 2026-09
 uv run dbt build --project-dir dbt --profiles-dir dbt
-uv run python -m ingestion.cli report --month 2026-09
+uv run python -m ingestion.cli report --month 2026-09               # PDF
+uv run python -m ingestion.cli report --month 2026-09 --format md   # Markdown
 ```
 
 `dbt build` se lance depuis la racine du dépôt : `dbt/profiles.yml` lit
@@ -142,8 +185,12 @@ cd airflow
 astro dev start
 ```
 
-L'UI est sur <http://localhost:8080> (`admin` / `admin`). Le DAG `eco2mix_hourly_ingest`
-apparaît activé ; `astro dev stop` arrête la stack.
+L'UI est sur <http://localhost:8080> (`admin` / `admin`). Les trois DAGs apparaissent :
+`eco2mix_hourly_ingest` (horaire), `eco2mix_monthly_consolidation` (mensuel) et
+`eco2mix_monthly_report` (sans planification, à déclencher). `astro dev stop` arrête la stack.
+
+`airflow/.astro/config.yaml` identifie le dossier comme projet Astro ; les identifiants RTE se
+placent dans `airflow/.env` (gitignoré), qu'Astro injecte dans les conteneurs.
 
 `docker-compose.override.yml` monte trois volumes dans les conteneurs :
 
@@ -267,8 +314,15 @@ La bascule vers `/exports/csv` est automatique — un seul appel API pour l'ann�
 
 ## Rapport mensuel : pics de carbone et créneaux Tempo
 
-Un PDF de 3 à 4 pages pour un particulier au tarif Tempo, généré **à la demande** pour un mois
-civil. Il ne recalcule aucune règle métier : tout vient de `gold.fct_creneau_horaire` (une
+Un rapport pour un particulier au tarif Tempo, généré **à la demande** pour un mois civil, en
+deux formats aux chiffres identiques :
+
+- **PDF** de 3 à 4 pages, prêt à imprimer ou à envoyer ;
+- **Markdown** : un document texte (tableaux, liens) lisible sur GitHub ou dans un éditeur, avec
+  ses graphiques en PNG dans un dossier voisin `eco2mix_rapport_AAAA-MM_graphiques/`
+  (`--sans-graphiques` pour du texte seul).
+
+Le rapport ne recalcule aucune règle métier : tout vient de `gold.fct_creneau_horaire` (une
 ligne par heure : intensité CO₂, couleur Tempo, période tarifaire, prix TTC).
 
 | Section | Contenu |
@@ -284,11 +338,12 @@ ligne par heure : intensité CO₂, couleur Tempo, période tarifaire, prix TTC)
 Dans l'UI Airflow, **Trigger DAG w/ config** sur `eco2mix_monthly_report` :
 
 ```json
-{"mois": "2026-09", "tempo": true, "heures_creneau": 3, "usage_flexible_kwh": 7}
+{"mois": "2026-09", "tempo": true, "heures_creneau": 3, "usage_flexible_kwh": 7, "format": "pdf"}
 ```
 
-Sans `mois`, le rapport porte sur le mois précédent. Le PDF est écrit dans
-`data/reports/eco2mix_rapport_AAAA-MM.pdf` et son chemin est remonté en XCom.
+Sans `mois`, le rapport porte sur le mois précédent. Il est écrit dans
+`data/reports/eco2mix_rapport_AAAA-MM.pdf` (ou `.md` avec `"format": "md"`) et son chemin est
+remonté en XCom. En dehors d'Airflow, la commande `report` de la CLI produit le même document.
 
 ### Calendrier Tempo : identifiants RTE
 
@@ -359,7 +414,7 @@ uv run pytest
 | [`test_warehouse.py`](ingestion/tests/test_warehouse.py) | Idempotence du MERGE, révisions, dédoublonnage, clé primaire |
 | [`test_pipeline.py`](ingestion/tests/test_pipeline.py) | Bout-en-bout API simulée → Parquet → DuckDB, contrôles de fraîcheur et de complétude |
 | [`test_extract_rte.py`](ingestion/tests/test_extract_rte.py) | Jeton OAuth (Basic, réutilisé), découpage des plages, dates futures, retry, couleurs inconnues |
-| [`test_report.py`](ingestion/tests/test_report.py) | Épisodes de pic, meilleur créneau bleu HC, économie estimée, repli sans prix, PDF écrit |
+| [`test_report.py`](ingestion/tests/test_report.py) | Épisodes de pic, meilleur créneau bleu HC, économie estimée, repli sans prix, PDF et Markdown écrits (graphiques, liens relatifs, version texte seul) |
 | [`test_dbt.py`](ingestion/tests/test_dbt.py) | `dbt build` de bronze à gold : lignes vides écartées, bascule consolidé → temps réel sans double comptage, jour de 25 h, premier run sans consolidé |
 
 Les 56 tests de données dbt (unicité, valeurs admises, bornes, intégrité référentielle, absence
@@ -372,8 +427,9 @@ La CI GitHub Actions ([`ci.yml`](.github/workflows/ci.yml)) tourne sur un runner
 aucun credential** :
 
 - `ruff check` + `ruff format --check` + `pytest`, `dbt build` compris ;
-- import du `DagBag` avec Airflow 2.10 — les erreurs d'import des deux DAGs, leurs tâches et
-  l'usage du pool `duckdb_writer` sont vérifiés sans Docker.
+- import du `DagBag` avec Airflow 2.10 — les erreurs d'import des trois DAGs, leurs tâches,
+  l'usage du pool `duckdb_writer` et l'absence de planification du DAG de rapport sont vérifiés
+  sans Docker.
 
 ---
 
@@ -389,15 +445,37 @@ Mesurés lors du premier run de validation contre l'API (2026-09-08, fenêtre d'
 | Retard de la donnée mesurée à l'instant du contrôle | **~0,5 h** (seuil : 2 h) |
 | Taille d'un fichier Parquet (4 lignes, zstd) | 8,1 ko |
 
-<!-- À compléter après quelques jours d'exécution continue du DAG. -->
+Historique complet, chargé le 2026-10-04 (2 appels API au total) :
 
 | Indicateur | Valeur |
 |---|---|
-| Lignes en base (`bronze.national_tr`) | _à compléter_ |
-| Profondeur d'historique | _à compléter_ |
-| Taille d'une partition Parquet quotidienne | _à compléter_ |
+| Profondeur d'historique | **1er janvier 2012 → aujourd'hui** (définitif jusqu'à fin 2024, consolidé jusqu'à juin 2026, temps réel ensuite) |
+| Lignes en bronze | **508 260** (consolidé/définitif) + **9 200** (temps réel, ~96 jours) |
+| Mesures dans la série unifiée (`silver.mix_unifie`) | **263 322** |
+| Production par filière (`gold.fct_production_filiere`) | **2,1 millions** de lignes |
+| Continuité | **14 h manquantes en 15 ans**, toutes à la source (voir [particularités](#particularités-de-la-source-rte)) |
+| Backfill du consolidé (export d'un seul appel, 508 320 lignes) | **~1 min 30**, Parquet de 14 Mo |
+| `dbt build` complet (66 nœuds) sur tout l'historique | **~22 s** |
+| Base DuckDB (trois couches) | **139 Mo** |
+
+<!-- À compléter après 7 jours d'exécution continue des DAGs. -->
+
+| Indicateur | Valeur |
+|---|---|
 | Appels API consommés sur 30 jours | _à compléter_ (budget : ~880) |
-| Taux de succès des runs du DAG | _à compléter_ |
+| Taux de succès des runs du DAG horaire | _à compléter_ |
+
+### Particularités de la source RTE
+
+RTE publie **24 heures d'horloge par jour**, y compris aux changements d'heure :
+
+- **fin mars**, l'heure locale 2 h–3 h, qui n'existe pas, est quand même publiée et retombe sur
+  les mêmes instants UTC que 3 h–4 h, avec des valeurs identiques. Le dédoublonnage du
+  chargement l'absorbe (4 lignes par an) ;
+- **fin octobre**, l'heure locale 2 h–3 h, qui existe deux fois, n'est publiée qu'**une seule
+  fois** : la première occurrence (0 h–1 h UTC) manque, sur tout l'historique. Ces journées
+  ressortent avec `est_complet = false` dans `gold.fct_mix_journalier` (24 h couvertes sur 25),
+  plutôt que d'être complétées par une valeur inventée.
 
 ---
 
@@ -427,7 +505,7 @@ Le DAG, le client API et la normalisation restent inchangés.
 eco2mix-data-platform/
 ├── ingestion/              # clients API (ODRÉ, RTE), normalisation, warehouse, CLI
 │   └── tests/              # pytest — aucun appel réseau
-├── reporting/              # rapport PDF mensuel (matplotlib + reportlab)
+├── reporting/              # rapport mensuel PDF / Markdown (matplotlib + reportlab)
 ├── airflow/                # projet Astro (Airflow 2.10, Python 3.12)
 │   └── dags/               # ingestion horaire, consolidation mensuelle, rapport à la demande
 ├── dbt/                    # couches silver et gold (dbt-duckdb)

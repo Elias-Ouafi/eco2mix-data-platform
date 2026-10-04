@@ -1,0 +1,3 @@
+# Marque airflow/ comme projet Astro : requis par `astro dev start`.
+project:
+  name: eco2mix-data-platform

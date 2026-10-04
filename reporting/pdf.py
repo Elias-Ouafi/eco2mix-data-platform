@@ -8,7 +8,6 @@ tableaux écrivent « CO2 » en clair.
 from __future__ import annotations
 
 import io
-from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -29,12 +28,15 @@ from reportlab.platypus import (
 
 from reporting import charts
 from reporting.data import Creneau, RapportMensuel
-
-MOIS = [
-    "janvier", "février", "mars", "avril", "mai", "juin",
-    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
-]  # fmt: skip
-JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+from reporting.formats import NBSP, nom_mois
+from reporting.formats import co2 as _co2
+from reporting.formats import creneau_tarif as _creneau_tarif
+from reporting.formats import euros as _euros
+from reporting.formats import heure as _heure
+from reporting.formats import jour as _jour
+from reporting.formats import nombre as _nombre
+from reporting.formats import plage as _plage
+from reporting.formats import prix as _prix
 
 ENCRE = colors.HexColor("#1F2933")
 DISCRET = colors.HexColor("#5F6B76")
@@ -73,57 +75,6 @@ STYLES = {
 }  # fmt: skip
 
 CO2 = "CO<sub>2</sub>"
-
-
-# --- Formats ----------------------------------------------------------------
-
-
-def nom_mois(mois: date) -> str:
-    return f"{MOIS[mois.month - 1]} {mois.year}"
-
-
-def _nombre(valeur: float, decimales: int = 0) -> str:
-    texte = f"{valeur:,.{decimales}f}".replace(",", " ").replace(".", ",")
-    return texte
-
-
-def _euros(valeur: float | None, decimales: int = 2) -> str:
-    return "n.d." if valeur is None else f"{_nombre(valeur, decimales)} €"
-
-
-def _prix(valeur: float | None) -> str:
-    return "n.d." if valeur is None else f"{_nombre(valeur, 4)} €/kWh"
-
-
-def _co2(valeur: float | None) -> str:
-    return "n.d." if valeur is None else f"{_nombre(valeur)} g/kWh"
-
-
-def _jour(valeur: date) -> str:
-    return f"{JOURS[valeur.weekday()]} {valeur.day} {MOIS[valeur.month - 1]}"
-
-
-#: Espace insécable : « 13 h » ne doit jamais être coupé en fin de ligne.
-NBSP = chr(0xA0)
-
-
-def _heure(valeur: datetime | int) -> str:
-    heure = valeur if isinstance(valeur, int) else valeur.hour
-    return f"{heure}{NBSP}h"
-
-
-def _plage(debut: datetime, fin: datetime) -> str:
-    if debut.date() == fin.date():
-        return f"{_jour(debut.date())}, {_heure(debut)}–{_heure(fin)}"
-    if fin.hour == 0 and fin.date() - debut.date() == timedelta(days=1):
-        # Se termine à minuit : on reste sur le jour de début.
-        return f"{_jour(debut.date())}, {_heure(debut)}–{_heure(24)}"
-    return f"{_jour(debut.date())} {_heure(debut)} → {_jour(fin.date())} {_heure(fin)}"
-
-
-def _creneau_tarif(creneau: Creneau) -> str:
-    periode = "heures creuses" if creneau.periode == "hc" else "heures pleines"
-    return periode if creneau.couleur is None else f"jour {creneau.couleur}, {periode}"
 
 
 # --- Blocs ------------------------------------------------------------------
