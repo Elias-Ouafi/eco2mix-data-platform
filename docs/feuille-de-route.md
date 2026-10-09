@@ -33,10 +33,10 @@ dépôt, lance une commande et passe l'adresse en argument.
 
 | # | Étape | Fini quand | Dépend de |
 |---|---|---|---|
-| 1.1 | Déclarer les sources dbt des jeux territoriaux dans `_bronze__sources.yml` | `dbt build` passe avec les nouvelles sources | — |
-| 1.2 | Charger `consommation-annuelle-par-iris` (17 891 lignes) dans la base réelle | La table bronze contient les 17 891 lignes | 1.1 |
-| 1.3 | Charger `equilibre-regional-mensuel` (1 872) et `contraintes-regionales` (12) | Tables bronze peuplées | 1.1 |
-| 1.4 | Ajouter les trois specs à `BRONZE_SPECS` | Les tables existent dès le premier run, sans dépendance d'ordre | 1.1 |
+| 1.1 | ~~Déclarer les sources dbt des jeux territoriaux~~ — **fait** (9 oct.), 8 tests de source ajoutés | ~~`dbt build` passe~~ 74/74 verts | — |
+| 1.2 | ~~Charger `consommation-annuelle-par-iris`~~ — **fait** (9 oct.) : 17 656 lignes après dédoublonnage, 2012→2023, 1 523 communes | ~~La table bronze est peuplée~~ | 1.1 |
+| 1.3 | ~~Charger `equilibre-regional-mensuel` et `contraintes-regionales`~~ — **fait** (9 oct.) : 1 872 et 12 lignes | ~~Tables bronze peuplées~~ | 1.1 |
+| 1.4 | ~~Ajouter les trois specs à `BRONZE_SPECS`~~ — **fait** (9 oct.) | ~~Les tables existent dès le premier run~~ | 1.1 |
 | 1.5 | Charger `eco2mix-regional-cons-def` (2,86 M lignes, 1 appel export) | Série régionale au pas 15 min disponible | 1.1 |
 | 1.6 | Référentiel territoires : commune → département → région (codes INSEE) | Un `code_insee_commune` résout sa hiérarchie sans appel réseau | — |
 | 1.7 | Silver : normaliser les noms de région et joindre **par code INSEE**, jamais par libellé | Les trois jeux se joignent sans perte | 1.2, 1.3, 1.6 |
@@ -125,8 +125,8 @@ quiconque clone le dépôt.
 
 | # | Étape | Pourquoi elle est dans le MVP | Effort |
 |---|---|---|---|
-| **1** | Sources dbt + chargement de `consommation-annuelle-par-iris`, `equilibre-regional-mensuel` et `contraintes-regionales` dans la base réelle (3 appels API) | Sans elles, `--adresse` ne renvoie que des codes administratifs. C'est **la** étape qui débloque tout. | ½ journée |
-| **2** | Référentiel commune → département → région, et silver normalisée jointe **par code INSEE** | Les sources écrivent `GRAND EST` et `Grand Est` : sans normalisation, la jointure perd des lignes en silence. | ½ journée |
+| **1** | ~~Sources dbt + chargement des trois jeux territoriaux~~ — **FAIT le 9 octobre 2026** (4 appels API) | Sans elles, `--adresse` ne renvoyait que des codes administratifs. | ~~½ journée~~ |
+| **2** | Référentiel commune → département → région, et silver normalisée jointe **par code INSEE**. **À intégrer** : seules 1 523 communes ont un site industriel raccordé au transport, donc le diagnostic doit agréger au département quand la commune est vide — et le dire. | Les sources écrivent `GRAND EST` et `Grand Est` : sans normalisation, la jointure perd des lignes en silence. | ½ journée |
 | **3** | `fct_diagnostic_territoire` : une ligne par commune (pression industrielle, tension régionale, seuil de raccordement) | Le cœur du produit. Un `SELECT` par code INSEE doit suffire. | 1 journée |
 | **4** | `diagnose --adresse` : géocodage → diagnostic en sortie terminal, limites affichées | C'est le livrable visible, et la forme exacte que tu as fixée. | ½ journée |
 | **5** | Coût horaire sur **un seul** profil type, avec la grille Tempo existante | Prouve le volet prix sans attendre les quatre profils ni le TURPE détaillé. | 1 journée |

@@ -14,9 +14,12 @@ data/
 │   ├── eco2mix_national_cons_def/
 │   │   └── ingest_date=YYYY-MM-DD/
 │   │       └── part-<run_id>.parquet
-│   └── rte_tempo/                         # calendrier Tempo (API RTE)
-│       └── ingest_date=YYYY-MM-DD/
-│           └── part-<run_id>.parquet
+│   ├── rte_tempo/                         # calendrier Tempo (API RTE)
+│   │   └── ingest_date=YYYY-MM-DD/
+│   │       └── part-<run_id>.parquet
+│   ├── consommation_annuelle_par_iris/    # sites industriels, maille IRIS
+│   ├── equilibre_regional_mensuel_prod_conso_brute/
+│   └── energies_et_puissances_regionales_liees_au_contraintes/
 ├── warehouse/
 │   └── eco2mix.duckdb                     # schémas bronze, silver, gold
 └── reports/                               # rapports mensuels générés à la demande
