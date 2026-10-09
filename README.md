@@ -186,7 +186,7 @@ Le socle technique est réutilisé tel quel ; ce qui change est le périmètre f
 | # | Étape | Fini quand |
 |---|---|---|
 | 1 | Lancer la stack Airflow (`astro dev start`) | Le DAG horaire est vert plusieurs heures de suite et le DAG rapport produit un document depuis l'UI |
-| 2 | **Ingérer les jeux territoriaux** — *socle fait* : les quatre specs sont déclarés d'après les schémas réels, la clé de MERGE composite est en place, et deux jeux ont été chargés de bout en bout contre l'API réelle. *Reste* : déclarer les sources dbt et charger `consommation-annuelle-par-iris` et `eco2mix-regional-cons-def` | Les quatre jeux sont en bronze et en silver, tests dbt verts |
+| 2 | **Ingérer les jeux territoriaux** — *fait pour les trois jeux du MVP* (9 oct.) : sources dbt déclarées, 17 656 lignes IRIS (2012→2023), 1 872 équilibres régionaux, 12 relevés de contraintes, 74 tests dbt verts. *Reporté hors MVP* : `eco2mix-regional-cons-def` (2,86 M lignes) | Les jeux du MVP sont en bronze, testés |
 | 3 | ~~**Géocodage d'adresse**~~ — **fait** (9 octobre 2026) : `ingestion/geocode.py`, commande `geocode --adresse`, 17 tests, vérifié contre la BAN réelle | ~~Une adresse résout son territoire, hors ligne en test~~ |
 | 4 | **Gold : table de diagnostic par territoire** (pression industrielle, tension réseau régionale, mix et intensité carbone, seuil de raccordement Enedis/RTE) | Une requête par code INSEE renvoie le diagnostic complet |
 | 5 | **Coût horaire sur profil** : profils de consommation types, grille Tempo et TURPE vérifiées sur sources officielles | Un profil donné est chiffré créneau par créneau, avec le gain d'un décalage |

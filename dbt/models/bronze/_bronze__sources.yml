@@ -31,3 +31,50 @@ sources:
         columns:
           - name: date_heure
             data_tests: [unique, not_null]
+      - name: consommation_annuelle_par_iris
+        description: >
+          Consommation annuelle d'électricité et de gaz des sites industriels raccordés
+          aux réseaux de transport, à la maille IRIS, de 2012 à 2023. Pièce maîtresse du
+          diagnostic : porte `code_insee_commune`, clé de jointure avec le géocodage BAN.
+          Trois caractéristiques à connaître. `code_insee_commune` est nul sur environ
+          2,7 % des lignes (484 sur 17 656), qui ne sont donc pas localisables. Le jeu ne
+          couvre que 1 523 communes : l'immense majorité des communes françaises n'a aucun
+          site industriel raccordé au transport, et c'est une information en soi. Enfin
+          ODRÉ publie 233 clés en doublon dont une ligne est quasi vide ; le MERGE retient
+          la plus complète.
+        data_tests:
+          - unique_combination:
+              arguments:
+                columns: [annee, code_iris]
+        columns:
+          - name: annee
+            description: Année de référence, telle que publiée (« 2023 »).
+            data_tests: [not_null]
+          - name: code_iris
+            data_tests: [not_null]
+      - name: equilibre_regional_mensuel_prod_conso_brute
+        description: >
+          Équilibre mensuel production / consommation brute par région, de janvier 2014 à
+          décembre 2025, pour les 13 régions métropolitaines. Le solde
+          `consommation_brute - production_totale` donne le déficit régional, premier
+          indicateur de tension du réseau.
+        data_tests:
+          - unique_combination:
+              arguments:
+                columns: [mois, code_insee_region]
+        columns:
+          - name: mois
+            description: Mois de référence, tel que publié (« 2025-12 »).
+            data_tests: [not_null]
+          - name: code_insee_region
+            data_tests: [not_null]
+      - name: energies_et_puissances_regionales_liees_au_contraintes
+        description: >
+          Puissance EnR installée, puissance à compenser et énergie non évacuée par saison,
+          pour 12 régions. Instantané sans dimension temporelle (vision décembre 2024) :
+          il décrit la contrainte structurelle du réseau régional, pas une série.
+          Attention, la clé est le **libellé** de région en majuscules (« GRAND EST »), pas
+          un code INSEE : la jointure passe par une normalisation.
+        columns:
+          - name: region
+            data_tests: [unique, not_null]

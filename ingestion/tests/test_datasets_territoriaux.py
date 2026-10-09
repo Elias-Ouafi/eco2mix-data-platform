@@ -17,6 +17,7 @@ from pytest_httpx import HTTPXMock
 
 from ingestion.config import Settings
 from ingestion.datasets import (
+    CONSO_IRIS,
     CONTRAINTES_REGIONALES,
     EQUILIBRE_REGIONAL,
     NATIONAL_TR,
@@ -255,6 +256,42 @@ def test_primary_key_covers_the_whole_tuple(tmp_path: Path) -> None:
 
         assert keys is not None
         assert "mois" in keys[0] and "code_insee_region" in keys[0]
+
+
+@pytest.mark.parametrize("ordre", [("pleine", "vide"), ("vide", "pleine")])
+def test_duplicate_key_keeps_the_most_complete_row(tmp_path: Path, ordre: tuple[str, str]) -> None:
+    """ODRÉ publie parfois un doublon dont toutes les mesures sont nulles.
+
+    Les deux lignes partageant le même `ingested_at_utc`, un départage sur ce seul
+    horodatage serait arbitraire et perdrait la ligne renseignée une fois sur deux
+    (constaté : 118 clés sur 233 dans `consommation-annuelle-par-iris`).
+    Le résultat ne doit pas dépendre de l'ordre d'arrivée.
+    """
+    lignes = {
+        "pleine": {
+            "annee": "2023",
+            "code_iris": "132110802",
+            "commune": "Marseille",
+            "consommation_electricite_rte": 13503.25,
+            "pdl_electricite_rte": 1,
+        },
+        "vide": {"annee": "2023", "code_iris": "132110802", "commune": "Marseille"},
+    }
+    parquet = build_parquet(
+        [lignes[nom] for nom in ordre],
+        spec=CONSO_IRIS,
+        tmp_path=tmp_path,
+        run_id=f"dup-{'-'.join(ordre)}",
+    )
+
+    with DuckDBLoader(":memory:", spec=CONSO_IRIS) as loader:
+        result = loader.merge_parquet(parquet)
+
+        assert result.rows_in_file == 2
+        assert result.rows_merged == 1
+        assert loader.connection.execute(
+            "SELECT consommation_electricite_rte FROM bronze.consommation_annuelle_par_iris"
+        ).fetchone() == (13503.25,)
 
 
 # --- Dataset sans dimension temporelle -------------------------------------

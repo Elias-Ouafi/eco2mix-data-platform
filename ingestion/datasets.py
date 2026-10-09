@@ -374,9 +374,15 @@ TERRITORIAL_SPECS: tuple[DatasetSpec, ...] = (
 )
 
 #: Tables bronze créées d'office à chaque chargement, parce que la couche silver
-#: (dbt) lit toutes ses sources à chaque run. Les datasets territoriaux y
-#: entreront quand leurs sources dbt seront déclarées.
-BRONZE_SPECS: tuple[DatasetSpec, ...] = (NATIONAL_TR, NATIONAL_CONS_DEF, RTE_TEMPO)
+#: (dbt) lit toutes ses sources à chaque run. Sans cela, un run échouerait tant
+#: qu'un autre DAG n'a pas créé sa table — une dépendance d'ordre de déploiement
+#: qu'aucun DAG ne devrait porter.
+BRONZE_SPECS: tuple[DatasetSpec, ...] = (
+    NATIONAL_TR,
+    NATIONAL_CONS_DEF,
+    RTE_TEMPO,
+    *TERRITORIAL_SPECS,
+)
 
 
 def get_spec(dataset_id: str) -> DatasetSpec:

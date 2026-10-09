@@ -175,6 +175,23 @@ class DuckDBLoader:
         return " AND ".join(f"{left}.{name} = {right}.{name}" for name in self.spec.key_names)
 
     @property
+    def _dedup_order(self) -> str:
+        """Ordre de départage des lignes d'une même clé dans un lot.
+
+        La révision la plus récente gagne. À `ingested_at_utc` égal — deux lignes
+        de même clé dans un même fichier — c'est la **plus complète** qui gagne :
+        ODRÉ publie parfois un doublon dont toutes les mesures sont nulles, et un
+        départage arbitraire ferait perdre la ligne renseignée une fois sur deux.
+        """
+        if not self.spec.measures:
+            return "ingested_at_utc DESC"
+        completude = " + ".join(
+            f"CASE WHEN {column.name} IS NOT NULL THEN 1 ELSE 0 END"
+            for column in self.spec.measures
+        )
+        return f"ingested_at_utc DESC, ({completude}) DESC"
+
+    @property
     def _instant_column(self) -> str:
         """Colonne d'instant du spec, ou erreur si le dataset n'est pas temporel."""
         instant = self.spec.instant_column
@@ -241,7 +258,8 @@ class DuckDBLoader:
 
         Trois étapes dans une seule transaction :
 
-        1. dédoublonnage du lot (la révision la plus récente gagne) ;
+        1. dédoublonnage du lot (la révision la plus récente gagne, et à égalité
+           d'horodatage la ligne la plus complète) ;
         2. suppression des clés du lot déjà présentes dans la cible ;
         3. insertion du lot.
         """
@@ -257,7 +275,7 @@ class DuckDBLoader:
                 SELECT {self._column_list}
                 FROM read_parquet($source)
                 QUALIFY row_number() OVER (
-                    PARTITION BY {self._key_list} ORDER BY ingested_at_utc DESC
+                    PARTITION BY {self._key_list} ORDER BY {self._dedup_order}
                 ) = 1
                 """,
                 {"source": source},
