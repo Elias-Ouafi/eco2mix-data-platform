@@ -300,6 +300,32 @@ def test_call_count_is_logged_on_close(
     assert "odre_api_calls=1" in caplog.text
 
 
+def test_export_csv_strips_the_utf8_bom(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+    window: ExtractionWindow,
+) -> None:
+    """ODRE prefixe ses exports d'un BOM, qui se colle au nom de la 1re colonne.
+
+    Non retire, `perimetre` devient `\ufeffperimetre` : la colonne part a `null`
+    sans aucune erreur, et si la 1re colonne est une cle de MERGE, toutes les
+    lignes sont ecartees. Ce test fige le decodage `utf-8-sig`.
+    """
+    csv_text = "perimetre;date_heure;consommation\nFrance;2026-09-07T03:00:00+00:00;42000\n"
+    httpx_mock.add_response(content=("\ufeff" + csv_text).encode("utf-8"))
+
+    with OdreClient(settings) as client:
+        records = client.fetch_export_csv(window)
+
+    assert records == [
+        {
+            "perimetre": "France",
+            "date_heure": "2026-09-07T03:00:00+00:00",
+            "consommation": "42000",
+        }
+    ]
+
+
 def test_quota_headers_are_recorded(
     httpx_mock: HTTPXMock,
     settings: Settings,

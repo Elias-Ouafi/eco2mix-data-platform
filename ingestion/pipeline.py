@@ -47,8 +47,9 @@ class ExtractionOutcome:
     parquet_path: str
     rows: int
     api_calls: int
-    window_start: str
-    window_end: str
+    #: Bornes de la fenêtre, absentes lors d'une extraction intégrale.
+    window_start: str | None
+    window_end: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,22 +134,42 @@ def extract_to_parquet(
     run_id: str = "manual",
     now: datetime | None = None,
 ) -> ExtractionOutcome:
-    """Extrait une fenêtre de l'API et l'écrit en Parquet typé.
+    """Extrait un dataset ODRÉ et l'écrit en Parquet typé.
 
-    Un fichier est écrit même si la fenêtre est vide : le chargement en aval
+    Deux régimes, selon le spec :
+
+    * **série temporelle** (`date_heure` en clé) — extraction sur fenêtre
+      glissante, l'endpoint étant choisi selon le volume estimé ;
+    * **dataset territorial** (clé sans instant) — extraction intégrale en un
+      appel, car filtrer sur le temps n'aurait aucun sens.
+
+    Un fichier est écrit même si le résultat est vide : le chargement en aval
     reste uniforme, et ce sont les contrôles qualité — pas l'extraction — qui
     décident si l'absence de donnée est anormale.
     """
     settings = settings or get_settings()
     ingested_at = (now or datetime.now(UTC)).astimezone(UTC)
-    window = window or ExtractionWindow.last_hours(settings.lookback_hours, now=ingested_at)
+
+    if spec.is_time_series:
+        window = window or ExtractionWindow.last_hours(settings.lookback_hours, now=ingested_at)
+    elif window is not None:
+        raise ValueError(
+            f"{spec.dataset_id} n'a pas de dimension temporelle : fenetre inutilisable"
+        )
 
     with OdreClient(settings, dataset_id=spec.dataset_id) as client:
-        records = client.fetch_window(window)
+        if window is None:
+            # Tri sur la première colonne de clé : `order_by` sur `date_heure`
+            # provoquerait une 400 sur un dataset qui n'a pas ce champ.
+            records = client.fetch_all(order_by=spec.key_names[0])
+        else:
+            records = client.fetch_window(window)
         api_calls = client.calls.count
 
     if not records:
-        logger.warning("aucun enregistrement publie sur la fenetre %s", window)
+        logger.warning(
+            "aucun enregistrement publie (%s, %s)", spec.dataset_id, window or "integral"
+        )
 
     table = records_to_table(records, spec=spec, ingested_at=ingested_at)
     path = write_parquet(
@@ -162,8 +183,8 @@ def extract_to_parquet(
         parquet_path=str(path),
         rows=table.num_rows,
         api_calls=api_calls,
-        window_start=window.start.isoformat(),
-        window_end=window.end.isoformat(),
+        window_start=None if window is None else window.start.isoformat(),
+        window_end=None if window is None else window.end.isoformat(),
     )
 
 
@@ -325,7 +346,7 @@ def check_month_coverage(
 
         year, month = _target_month(latest, reference)
         start, end = month_bounds(year, month)
-        actual = loader.count_distinct_keys(start=start, end=end)
+        actual = loader.count_distinct_instants(start=start, end=end)
     finally:
         loader.close()
 

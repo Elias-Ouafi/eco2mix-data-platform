@@ -46,7 +46,9 @@ RECORDS_MAX_OFFSET = 10_000 - RECORDS_PAGE_SIZE
 #: Statuts HTTP considérés comme transitoires, donc rejouables.
 RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
-USER_AGENT = "eco2mix-data-platform/0.1 (+https://github.com/)"
+USER_AGENT = (
+    "ou-brancher-mon-entreprise/0.1 (+https://github.com/Elias-Ouafi/ou-brancher-mon-entreprise)"
+)
 
 
 class ExtractionError(RuntimeError):
@@ -98,6 +100,11 @@ class ApiCallCounter:
 
     def __repr__(self) -> str:  # pragma: no cover - confort de debug
         return f"ApiCallCounter(count={self.count}, quota_remaining={self.quota_remaining})"
+
+
+def _compact(params: dict[str, Any]) -> dict[str, Any]:
+    """Retire les paramètres à `None` : un `where` ou un `order_by` vide ferait une 400."""
+    return {k: v for k, v in params.items() if v is not None}
 
 
 def _optional_int(value: str | None) -> int | None:
@@ -198,6 +205,16 @@ class OdreClient:
 
     # -- Extraction ---------------------------------------------------------
 
+    def fetch_all(self, *, order_by: str | None = None) -> list[dict[str, Any]]:
+        """Extrait l'intégralité du dataset en un seul appel.
+
+        Pour les datasets sans dimension temporelle (contraintes régionales,
+        consommation annuelle par IRIS), filtrer sur une fenêtre n'a pas de sens :
+        on passe directement par l'export, qui n'a pas de plafond de pagination.
+        """
+        logger.info("extraction integrale de %s : /exports/csv", self.dataset_id)
+        return self.fetch_export_csv(None, order_by=order_by)
+
     def fetch_window(self, window: ExtractionWindow) -> list[dict[str, Any]]:
         """Récupère tous les enregistrements de la fenêtre, endpoint choisi automatiquement."""
         estimated = window.estimated_rows()
@@ -207,7 +224,12 @@ class OdreClient:
         logger.info("fenetre %s (~%d lignes) : /records", window, estimated)
         return self.fetch_records(window)
 
-    def fetch_records(self, window: ExtractionWindow) -> list[dict[str, Any]]:
+    def fetch_records(
+        self,
+        window: ExtractionWindow | None,
+        *,
+        order_by: str | None = "date_heure",
+    ) -> list[dict[str, Any]]:
         """Pagine `/records` jusqu'à épuisement de la fenêtre.
 
         Lève `PaginationLimitExceededError` si la fenêtre dépasse la profondeur
@@ -220,13 +242,15 @@ class OdreClient:
         while True:
             payload = self._get(
                 path,
-                params={
-                    "where": window.to_odsql(),
-                    "order_by": "date_heure",
-                    "limit": RECORDS_PAGE_SIZE,
-                    "offset": offset,
-                    "timezone": "UTC",
-                },
+                params=_compact(
+                    {
+                        "where": None if window is None else window.to_odsql(),
+                        "order_by": order_by,
+                        "limit": RECORDS_PAGE_SIZE,
+                        "offset": offset,
+                        "timezone": "UTC",
+                    }
+                ),
             ).json()
             page = payload.get("results", [])
             records.extend(page)
@@ -241,7 +265,12 @@ class OdreClient:
                     f"(offset max {RECORDS_MAX_OFFSET}) : utiliser /exports/csv"
                 )
 
-    def fetch_export_csv(self, window: ExtractionWindow) -> list[dict[str, Any]]:
+    def fetch_export_csv(
+        self,
+        window: ExtractionWindow | None,
+        *,
+        order_by: str | None = "date_heure",
+    ) -> list[dict[str, Any]]:
         """Récupère la fenêtre en un seul appel via `/exports/csv`.
 
         Les valeurs sont des chaînes (les vides valent `null`) ; `transform`
@@ -250,15 +279,21 @@ class OdreClient:
         path = f"catalog/datasets/{self.dataset_id}/exports/csv"
         response = self._get(
             path,
-            params={
-                "where": window.to_odsql(),
-                "order_by": "date_heure",
-                "timezone": "UTC",
-                "delimiter": ";",
-                "use_labels": "false",
-            },
+            params=_compact(
+                {
+                    "where": None if window is None else window.to_odsql(),
+                    "order_by": order_by,
+                    "timezone": "UTC",
+                    "delimiter": ";",
+                    "use_labels": "false",
+                }
+            ),
         )
-        reader = csv.DictReader(io.StringIO(response.text), delimiter=";")
+        # ODRÉ préfixe ses exports CSV d'un BOM UTF-8 : décodé en `utf-8` simple,
+        # il se collerait au nom de la première colonne (`﻿region`), qui
+        # deviendrait introuvable. `utf-8-sig` le retire.
+        text = response.content.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text), delimiter=";")
         return [dict(row) for row in reader]
 
     # -- Couche HTTP --------------------------------------------------------

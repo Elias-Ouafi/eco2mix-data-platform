@@ -7,6 +7,7 @@
     python -m ingestion.cli load data/bronze/.../part-x.parquet
     python -m ingestion.cli freshness
     python -m ingestion.cli coverage
+    python -m ingestion.cli geocode --adresse "12 rue de la Paix, 69003 Lyon"
     python -m ingestion.cli tempo --month 2026-09        # calendrier Tempo (API RTE)
     python -m ingestion.cli report --month 2026-09       # rapport PDF du mois
     python -m ingestion.cli report --month 2026-09 --format md   # même rapport en Markdown
@@ -27,6 +28,7 @@ from ingestion.config import get_settings
 from ingestion.datasets import NATIONAL_CONS_DEF, NATIONAL_TR, SPECS, get_spec
 from ingestion.extract_odre import ExtractionWindow
 from ingestion.extract_rte import DayRange, RteCredentialsMissingError
+from ingestion.geocode import GeocodingError, geocode
 from ingestion.pipeline import (
     IncompleteMonthError,
     StaleDataError,
@@ -107,6 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_dataset_option(freshness, NATIONAL_TR.dataset_id)
 
+    geocode_cmd = subparsers.add_parser(
+        "geocode", help="résout une adresse en territoire administratif"
+    )
+    geocode_cmd.add_argument(
+        "--adresse", required=True, help="adresse à résoudre, entre guillemets"
+    )
+
     coverage = subparsers.add_parser(
         "coverage", help="contrôle la complétude du dernier mois révolu"
     )
@@ -170,6 +179,22 @@ def main(argv: list[str] | None = None) -> int:
             except IncompleteMonthError as error:
                 logger.error("mois incomplet : %s", error)
                 return 1
+        case "geocode":
+            try:
+                territoire = geocode(args.adresse, settings=settings)
+            except GeocodingError as error:
+                logger.error("geocodage impossible : %s", error)
+                return 1
+            lignes = [
+                f"adresse           : {territoire.adresse}",
+                f"commune           : {territoire.commune} ({territoire.code_insee_commune})",
+                f"departement       : {territoire.departement} ({territoire.code_departement})",
+                f"region            : {territoire.region}"
+                f" ({territoire.code_insee_region or 'code inconnu'})",
+                f"coordonnees       : {territoire.latitude:.5f}, {territoire.longitude:.5f}",
+                f"precision / score : {territoire.precision} / {territoire.score:.2f}",
+            ]
+            print("\n".join(lignes))
         case "tempo":
             if args.month:
                 days = tempo_days_for_month(args.month)

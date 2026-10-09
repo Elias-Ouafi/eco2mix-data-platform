@@ -1,5 +1,5 @@
 [project]
-name = "eco2mix-data-platform"
+name = "ou-brancher-mon-entreprise"
 version = "0.1.0"
 description = "Plateforme eCO2mix (RTE) en architecture medaillon et rapports mensuels carbone / Tempo"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-eco2mix = "ingestion.cli:main"
+ou-brancher = "ingestion.cli:main"
 
 [dependency-groups]
 dev = [
