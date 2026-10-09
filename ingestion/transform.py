@@ -25,7 +25,12 @@ from zoneinfo import ZoneInfo
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ingestion.datasets import INGESTED_AT_COLUMN, KEY_COLUMN, SOURCE_COLUMN, DatasetSpec
+from ingestion.datasets import (
+    INGESTED_AT_COLUMN,
+    SOURCE_COLUMN,
+    ColumnKind,
+    DatasetSpec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +137,30 @@ def _coerce_str(value: Any) -> str | None:
     return text or None
 
 
+def _normalize_instant_column(
+    records: Sequence[dict[str, Any]],
+    *,
+    name: str,
+    group_names: Sequence[str],
+) -> list[datetime]:
+    """Normalise une colonne d'instant en UTC, groupe par groupe.
+
+    La lève d'ambiguïté d'octobre s'appuie sur l'instant précédent de la série.
+    Or un dataset régional publie le même instant pour les douze régions : pris
+    à plat, le deuxième enregistrement d'un instant répété serait vu comme un
+    retour en arrière et basculerait à tort en heure d'hiver. On suit donc un
+    instant précédent **par groupe** (les autres colonnes de la clé).
+    """
+    previous: dict[tuple[str | None, ...], datetime] = {}
+    instants: list[datetime] = []
+    for record in records:
+        group = tuple(_coerce_str(record.get(g)) for g in group_names)
+        value = to_utc(str(record[name]), previous.get(group))
+        previous[group] = value
+        instants.append(value)
+    return instants
+
+
 def records_to_table(
     records: Sequence[dict[str, Any]],
     *,
@@ -140,18 +169,22 @@ def records_to_table(
 ) -> pa.Table:
     """Construit la table pyarrow typée à partir des enregistrements bruts.
 
-    Les enregistrements sans `date_heure` sont écartés (avec un avertissement) :
-    ils ne peuvent pas participer au MERGE. Les colonnes du spec absentes de la
-    réponse sont créées à `null` et signalées — c'est le garde-fou contre un
-    renommage de champ côté ODRÉ.
+    Les enregistrements dont une colonne de clé est absente sont écartés (avec un
+    avertissement) : ils ne peuvent pas participer au MERGE. Les colonnes du spec
+    absentes de la réponse sont créées à `null` et signalées — c'est le garde-fou
+    contre un renommage de champ côté ODRÉ. Les colonnes renvoyées par l'API mais
+    absentes du spec sont ignorées.
     """
     if ingested_at.tzinfo is None:
         raise ValueError("ingested_at doit être un datetime aware")
     ingested_at_utc = ingested_at.astimezone(UTC)
 
-    usable = [r for r in records if _coerce_str(r.get(KEY_COLUMN))]
+    key_names = spec.key_names
+    usable = [r for r in records if all(_coerce_str(r.get(n)) for n in key_names)]
     if (dropped := len(records) - len(usable)) > 0:
-        logger.warning("%d enregistrement(s) sans %s ignore(s)", dropped, KEY_COLUMN)
+        logger.warning(
+            "%d enregistrement(s) sans cle complete %s ignore(s)", dropped, list(key_names)
+        )
 
     if usable:
         seen: set[str] = set().union(*(set(r.keys()) for r in usable))
@@ -159,18 +192,24 @@ def records_to_table(
         if missing := sorted(set(spec.schema.names) - seen - technical):
             logger.warning("colonnes absentes de la reponse API, remplies a null : %s", missing)
 
-    columns: dict[str, list[Any]] = {
-        KEY_COLUMN: normalize_datetimes(str(r[KEY_COLUMN]) for r in usable),
-    }
-    for name in spec.label_columns:
-        columns[name] = [_coerce_str(r.get(name)) for r in usable]
-    for name in spec.measure_columns:
-        columns[name] = [_coerce_float(r.get(name), column=name) for r in usable]
+    group_names = [n for n in key_names if n != spec.instant_column]
+    columns: dict[str, list[Any]] = {}
+    for column in spec.columns:
+        if column.kind is ColumnKind.INSTANT:
+            columns[column.name] = _normalize_instant_column(
+                usable, name=column.name, group_names=group_names
+            )
+        elif column.kind is ColumnKind.MEASURE:
+            columns[column.name] = [
+                _coerce_float(r.get(column.name), column=column.name) for r in usable
+            ]
+        else:
+            columns[column.name] = [_coerce_str(r.get(column.name)) for r in usable]
     columns[INGESTED_AT_COLUMN] = [ingested_at_utc] * len(usable)
     columns[SOURCE_COLUMN] = [spec.dataset_id] * len(usable)
 
     table = pa.table(columns, schema=spec.schema)
-    return table.sort_by(KEY_COLUMN)
+    return table.sort_by([(name, "ascending") for name in key_names])
 
 
 def _safe_run_id(run_id: str) -> str:

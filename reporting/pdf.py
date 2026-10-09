@@ -457,7 +457,7 @@ def rendre(rapport: RapportMensuel, chemin: Path) -> Path:
         bottomMargin=18 * mm,
         title=titre,
         subject="Pics de carbone et meilleurs créneaux Tempo",
-        author="eco2mix-data-platform",
+        author="Où brancher mon entreprise",
     )
     blocs: list = [
         Paragraph(titre, STYLES["titre"]),

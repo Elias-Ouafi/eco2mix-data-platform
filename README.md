@@ -1,20 +1,57 @@
-# eco2mix-data-platform
+# Où brancher mon entreprise
 
-Plateforme de données **éCO2mix** de RTE (mix électrique français), exposées par la
-plateforme **ODRÉ** via l'API Opendatasoft Explore v2.1, organisée en **architecture
-médaillon** (bronze → silver → gold).
+**Diagnostic d'implantation électrique par adresse.** À partir d'une adresse française, le
+projet restitue le contexte électrique du territoire — pression industrielle locale, tension du
+réseau régional, mix et intensité carbone au pas 15 minutes — et chiffre le **coût horaire**
+d'un profil de consommation selon le calendrier **Tempo**.
 
-Le pipeline extrait les datasets nationaux temps réel et consolidé/définitif ainsi que le
-calendrier **Tempo** de RTE, les dépose en Parquet immuable (bronze), puis **dbt** les nettoie
-et les unifie (silver) avant de produire les tables métier (gold) — le tout dans **DuckDB**,
-orchestré par **Airflow** (Astro CLI) et exécuté **100 % en local**, sans aucun service cloud.
+Les données viennent de **RTE** et de la plateforme **ODRÉ** (API Opendatasoft Explore v2.1).
+Elles sont organisées en **architecture médaillon** (bronze → silver → gold) dans **DuckDB**,
+transformées par **dbt** et orchestrées par **Airflow** (Astro CLI) — le tout **100 % en local**,
+sans aucun service cloud.
 
-À la demande, un **rapport mensuel** (PDF ou Markdown) destiné aux particuliers en tire les pics de carbone
-et les meilleurs créneaux pour consommer selon le tarif Tempo (voir
+Le préfixe de configuration (`ECO2MIX_*`), le fichier de base (`eco2mix.duckdb`) et le projet
+dbt (`eco2mix`) gardent le nom de la source de données : ils désignent la donnée, pas le produit.
+
+> ### Pourquoi ce cadrage, et pas « le prix et le CO₂ à votre adresse »
+>
+> Le [cadrage produit](docs/cadrage-besoins-entreprises.md) a invalidé la formulation
+> intuitive, et c'est ce qui définit le périmètre actuel :
+>
+> - **le prix n'est pas géographique en France.** La péréquation tarifaire rend le TURPE
+>   identique en tout point du territoire, Corse et outre-mer compris. Un « prix moyen à cette
+>   adresse » renverrait la même valeur partout.
+> - **il n'existe pas de facteur d'émission régional opposable.** Le réseau est interconnecté :
+>   l'ADEME ne publie qu'un facteur national, et RTE ne publie le `taux_co2` qu'au niveau
+>   national. Une intensité carbone « locale » serait une fausse précision.
+> - **la capacité de raccordement pour la consommation n'est pas en open data.** Caparéseau ne
+>   couvre que l'injection ; seule une étude RTE ou Enedis fait foi.
+>
+> Le projet livre donc ce qui est réellement mesurable : un **diagnostic de contexte et de
+> risque**, limites affichées à côté de chaque chiffre — une exigence autant méthodologique que
+> réglementaire (directive EmpCo sur les allégations environnementales).
+
+Un **rapport mensuel** (PDF ou Markdown) sur les pics de carbone et les créneaux Tempo existe
+déjà et sert de base au futur rapport d'implantation (voir
 [Rapport mensuel](#rapport-mensuel--pics-de-carbone-et-créneaux-tempo)).
 
-L'objectif est un socle de qualité production : ingestion idempotente, gestion explicite des
-changements d'heure, quota d'API suivi et documenté, tests sans réseau, CI sur runner nu.
+L'exigence technique est inchangée : ingestion idempotente, gestion explicite des changements
+d'heure, quota d'API suivi et documenté, tests sans réseau, CI sur runner nu.
+
+
+### Interface : une commande, pas une application
+
+**Aucun site, aucune application.** L'outil s'utilise en clonant le dépôt et en lançant une
+commande, l'adresse étant passée en argument :
+
+```bash
+uv run python -m ingestion.cli diagnose --adresse "12 rue de la Paix, 69003 Lyon"
+```
+
+La commande écrit le diagnostic dans le terminal et, à la demande, produit un rapport
+(`--format pdf` ou `--format md`) en réutilisant le moteur du rapport mensuel existant. C'est
+un choix assumé : le livrable est un pipeline de données et son interface en ligne de commande,
+pas une vitrine web.
 
 ---
 
@@ -84,6 +121,26 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 | Rapport | [`reporting/`](reporting/) | Chiffres du mois (`data.py`), graphiques (`charts.py`), mise en page PDF (`pdf.py`) |
 | Orchestration | [`airflow/dags/`](airflow/dags/) | DAG horaire (temps réel), mensuel (consolidé) et rapport à la demande, pool `duckdb_writer` |
 
+### Pile technique
+
+| Outil | Rôle | Pourquoi celui-là |
+|---|---|---|
+| **Python 3.12** | Extraction, normalisation, CLI, rapports | — |
+| **dbt (dbt-duckdb)** | Couches silver et gold, tests de données | Le SQL versionné et testé est la forme la plus lisible pour des transformations analytiques |
+| **Airflow** (Astro CLI) | Orchestration des trois DAGs | Standard de fait ; le projet Astro rend la stack reproductible en local |
+| **DuckDB** | Warehouse local, schémas bronze / silver / gold | Un seul fichier, pas de serveur, du SQL analytique complet. L'interface `WarehouseLoader` isole ce choix pour une bascule BigQuery ultérieure |
+| **Parquet** (pyarrow) | Zone bronze immuable, partitionnée par date d'ingestion | Format colonne typé, lisible par DuckDB aujourd'hui et par BigQuery demain |
+| **httpx** + **tenacity** | Appels HTTP, retry exponentiel, timeouts | `tenacity` évite d'écrire une boucle de retry à la main |
+| **pydantic-settings** | Configuration typée depuis l'environnement | Valide les réglages au démarrage plutôt qu'au premier appel |
+| **pytest** + **pytest-httpx** | 126 tests, aucun appel réseau réel | L'interception au niveau du transport garantit qu'aucun test ne sort |
+| **ruff** | Lint et format | Un seul outil pour les deux |
+| **matplotlib** + **reportlab** | Graphiques et PDF du rapport | Importés paresseusement : ils ne pèsent que sur la commande de rapport |
+
+**Pas de Spark, volontairement.** Le plus gros jeu fait 2,86 millions de lignes et le dépôt
+complet tient dans 150 Mo : DuckDB traite ces volumes en quelques secondes sur un poste de
+travail. Mobiliser un moteur distribué ici serait un contresens d'ingénierie, et la couche dbt
+reste transposable à un moteur Spark sans réécriture du modèle si les volumes changeaient.
+
 ### Hors périmètre
 
 - **Site web ou dashboard public** : écarté volontairement. Le livrable visible est le rapport
@@ -95,10 +152,11 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 
 ## État d'avancement
 
-*Mis à jour le 4 octobre 2026.*
+*Mis à jour le 9 octobre 2026 — réorientation du projet vers le diagnostic d'implantation
+(voir le [cadrage produit](docs/cadrage-besoins-entreprises.md), § 7 « Décision »).*
 
-**Objectif du MVP** : le pipeline tourne 7 jours sans intervention, le rapport mensuel sort avec
-les vrais prix Tempo, et ce README affiche des chiffres réels mesurés en exploitation.
+**Objectif du MVP** : une adresse française en entrée, un diagnostic de contexte électrique et
+un coût horaire de profil en sortie, produits par un pipeline qui tourne sans intervention.
 
 ### Fait et testé
 
@@ -123,13 +181,23 @@ les vrais prix Tempo, et ce README affiche des chiffres réels mesurés en explo
 
 ### Reste à faire
 
+Le socle technique est réutilisé tel quel ; ce qui change est le périmètre fonctionnel.
+
 | # | Étape | Fini quand |
 |---|---|---|
 | 1 | Lancer la stack Airflow (`astro dev start`) | Le DAG horaire est vert plusieurs heures de suite et le DAG rapport produit un document depuis l'UI |
-| 2 | Brancher les prix Tempo réels (compte RTE, identifiants dans `airflow/.env`, grille vérifiée) | Le rapport de septembre affiche jours rouges et économie en euros |
-| 3 | Fiabilité : alerte en cas d'échec d'une tâche, `main` protégée (CI obligatoire) | Un échec simulé déclenche l'alerte |
-| 4 | Exploitation sur 7 jours, puis chiffres clés restants (appels API sur 30 jours, taux de succès) | Le tableau des [chiffres clés](#chiffres-clés) est complet |
-| 5 | Vitrine : exemple de rapport et captures des graphiques dans ce README | Le dépôt se comprend sans rien installer |
+| 2 | **Ingérer les jeux territoriaux** — *socle fait* : les quatre specs sont déclarés d'après les schémas réels, la clé de MERGE composite est en place, et deux jeux ont été chargés de bout en bout contre l'API réelle. *Reste* : déclarer les sources dbt et charger `consommation-annuelle-par-iris` et `eco2mix-regional-cons-def` | Les quatre jeux sont en bronze et en silver, tests dbt verts |
+| 3 | ~~**Géocodage d'adresse**~~ — **fait** (9 octobre 2026) : `ingestion/geocode.py`, commande `geocode --adresse`, 17 tests, vérifié contre la BAN réelle | ~~Une adresse résout son territoire, hors ligne en test~~ |
+| 4 | **Gold : table de diagnostic par territoire** (pression industrielle, tension réseau régionale, mix et intensité carbone, seuil de raccordement Enedis/RTE) | Une requête par code INSEE renvoie le diagnostic complet |
+| 5 | **Coût horaire sur profil** : profils de consommation types, grille Tempo et TURPE vérifiées sur sources officielles | Un profil donné est chiffré créneau par créneau, avec le gain d'un décalage |
+| 6 | **Rapport d'implantation par adresse** (reprend le moteur du rapport mensuel) | Un PDF est produit pour une adresse saisie, limites méthodologiques affichées |
+| 7 | Fiabilité : alerte en cas d'échec d'une tâche, `main` protégée (CI obligatoire) | Un échec simulé déclenche l'alerte |
+| 8 | Exploitation sur 7 jours, puis chiffres clés restants | Le tableau des [chiffres clés](#chiffres-clés) est complet |
+| 9 | Vitrine : exemple de rapport et captures dans ce README | Le dépôt se comprend sans rien installer |
+
+**Écarté explicitement** (et pourquoi, cf. cadrage) : le prix moyen par adresse (péréquation
+tarifaire), l'intensité carbone régionale présentée comme opposable (pas de facteur ADEME
+régional), la capacité de raccordement chiffrée (absente de l'open data pour la consommation).
 
 ---
 
@@ -208,7 +276,38 @@ dépendances épinglées entrent en conflit avec celles d'Airflow.
 Le contexte de build Docker d'Astro se limite au dossier `airflow/`, il ne peut donc pas
 copier `../ingestion` : le code est monté à l'exécution et `PYTHONPATH=/usr/local/airflow`
 le rend importable. Une image de production devrait, elle, installer le package
-(`pip install eco2mix-data-platform`) plutôt que le monter.
+(`pip install ou-brancher-mon-entreprise`) plutôt que le monter.
+
+### Géocoder une adresse
+
+Premier maillon du diagnostic : l'adresse est résolue en codes administratifs, qui servent de
+clés de jointure avec les jeux territoriaux.
+
+```bash
+uv run python -m ingestion.cli geocode --adresse "12 rue de la Paix, 69003 Lyon"
+```
+
+```
+adresse           : 12 Rue de la Caille 69003 Lyon
+commune           : Lyon (69383)
+departement       : Rhône (69)
+region            : Auvergne-Rhône-Alpes (84)
+coordonnees       : 45.75185, 4.89474
+precision / score : housenumber / 0.63
+```
+
+Deux points de méthode. La BAN ne renvoie **pas** le code IRIS : l'obtenir supposerait une
+jointure spatiale avec les contours INSEE, inutile ici puisque le jeu
+`consommation-annuelle-par-iris` porte déjà `code_insee_commune`. Et elle renvoie le *nom* de la
+région quand ODRÉ attend son code INSEE : la correspondance est reconstituée localement sur un
+nom normalisé, sans accent ni casse, parce que les deux sources n'écrivent pas
+« Provence-Alpes-Côte d'Azur » de la même façon.
+
+Le score et la précision sont affichés et journalisés : dans l'exemple ci-dessus, « rue de la
+Paix » n'existe pas à Lyon 3e et la BAN a retenu la voie la plus proche, avec un score de 0,63.
+C'est exactement le genre d'approximation qu'un diagnostic doit montrer plutôt que masquer.
+
+---
 
 ### Qualité
 
@@ -467,6 +566,16 @@ Historique complet, chargé le 2026-10-04 (2 appels API au total) :
 
 ### Particularités de la source RTE
 
+**BOM dans les exports CSV.** ODRÉ préfixe ses réponses `/exports/csv` d'un BOM UTF-8. Décodé
+naïvement, il se colle au nom de la première colonne (`﻿perimetre`), qui devient
+introuvable : la colonne part à `null` sans la moindre erreur, et si cette première colonne est
+une clé de MERGE, **toutes les lignes sont écartées**. Le client décode donc en `utf-8-sig`
+(corrigé le 9 octobre 2026, test de non-régression dans `test_extract_odre.py`).
+
+> Si votre base a été chargée avant ce correctif, `perimetre` y est NULL partout. Un backfill
+> relancé le répare en place (un appel API par dataset), le MERGE écrasant les lignes par clé.
+
+
 RTE publie **24 heures d'horloge par jour**, y compris aux changements d'heure :
 
 - **fin mars**, l'heure locale 2 h–3 h, qui n'existe pas, est quand même publiée et retombe sur
@@ -502,7 +611,7 @@ Le DAG, le client API et la normalisation restent inchangés.
 ## Structure du dépôt
 
 ```
-eco2mix-data-platform/
+ou-brancher-mon-entreprise/
 ├── ingestion/              # clients API (ODRÉ, RTE), normalisation, warehouse, CLI
 │   └── tests/              # pytest — aucun appel réseau
 ├── reporting/              # rapport mensuel PDF / Markdown (matplotlib + reportlab)

@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     #: Portail API de RTE. Compte gratuit sur https://data.rte-france.com, puis
     #: abonnement à l'API « Tempo Like Supply Contract » pour obtenir ces identifiants.
     rte_api_base_url: str = "https://digital.iservices.rte-france.com"
+
+    #: API Adresse de la Géoplateforme (IGN). L'ancien point d'accès
+    #: api-adresse.data.gouv.fr a été décommissionné fin janvier 2026.
+    ban_base_url: str = "https://data.geopf.fr/geocodage"
     rte_client_id: str | None = None
     rte_client_secret: SecretStr | None = None
 

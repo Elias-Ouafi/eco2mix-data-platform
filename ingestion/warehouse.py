@@ -32,7 +32,7 @@ import duckdb
 import pyarrow as pa
 
 from ingestion.config import Settings, get_settings
-from ingestion.datasets import KEY_COLUMN, NATIONAL_TR, DatasetSpec
+from ingestion.datasets import NATIONAL_TR, DatasetSpec
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class WarehouseLoader(Protocol):
         ...
 
     def merge_parquet(self, parquet_path: Path | str) -> LoadResult:
-        """Fusionne un fichier Parquet dans la table cible, sur la clé `date_heure`."""
+        """Fusionne un fichier Parquet dans la table cible, sur la clé du spec."""
         ...
 
     def latest_timestamp(self, *, measure: str | None = None) -> datetime | None:
@@ -96,8 +96,12 @@ class WarehouseLoader(Protocol):
         """
         ...
 
-    def count_distinct_keys(self, *, start: datetime, end: datetime) -> int:
-        """Nombre de `date_heure` distincts dans l'intervalle `[start, end)`."""
+    def count_distinct_instants(self, *, start: datetime, end: datetime) -> int:
+        """Nombre d'instants distincts dans `[start, end)`.
+
+        Réservé aux datasets de série temporelle : un dataset territorial n'a
+        pas de colonne d'instant et l'appel échoue explicitement.
+        """
         ...
 
     def row_count(self) -> int:
@@ -162,6 +166,26 @@ class DuckDBLoader:
         return f"{self.schema}.{self.table}"
 
     @property
+    def _key_list(self) -> str:
+        """Colonnes de clé, dans l'ordre du spec."""
+        return ", ".join(self.spec.key_names)
+
+    def _key_join(self, left: str, right: str) -> str:
+        """Prédicat de jointure sur la clé composite entre deux alias."""
+        return " AND ".join(f"{left}.{name} = {right}.{name}" for name in self.spec.key_names)
+
+    @property
+    def _instant_column(self) -> str:
+        """Colonne d'instant du spec, ou erreur si le dataset n'est pas temporel."""
+        instant = self.spec.instant_column
+        if instant is None:
+            raise ValueError(
+                f"{self.spec.dataset_id} n'est pas une serie temporelle : "
+                "pas de controle temporel possible"
+            )
+        return instant
+
+    @property
     def _column_list(self) -> str:
         """Colonnes du schéma, énumérées explicitement.
 
@@ -206,7 +230,7 @@ class DuckDBLoader:
         self.connection.execute(
             f"CREATE TABLE IF NOT EXISTS {self.qualified_table} (\n"
             f"    {columns},\n"
-            f"    PRIMARY KEY ({KEY_COLUMN})\n"
+            f"    PRIMARY KEY ({self._key_list})\n"
             f")"
         )
 
@@ -233,7 +257,7 @@ class DuckDBLoader:
                 SELECT {self._column_list}
                 FROM read_parquet($source)
                 QUALIFY row_number() OVER (
-                    PARTITION BY {KEY_COLUMN} ORDER BY ingested_at_utc DESC
+                    PARTITION BY {self._key_list} ORDER BY ingested_at_utc DESC
                 ) = 1
                 """,
                 {"source": source},
@@ -245,13 +269,13 @@ class DuckDBLoader:
             rows_updated = self._scalar(
                 f"""
                 SELECT count(*) FROM {self.qualified_table} t
-                WHERE t.{KEY_COLUMN} IN (SELECT {KEY_COLUMN} FROM _batch)
+                WHERE EXISTS (SELECT 1 FROM _batch b WHERE {self._key_join("b", "t")})
                 """
             )
             connection.execute(
                 f"""
-                DELETE FROM {self.qualified_table}
-                WHERE {KEY_COLUMN} IN (SELECT {KEY_COLUMN} FROM _batch)
+                DELETE FROM {self.qualified_table} t
+                WHERE EXISTS (SELECT 1 FROM _batch b WHERE {self._key_join("b", "t")})
                 """
             )
             connection.execute(f"INSERT INTO {self.qualified_table} BY NAME SELECT * FROM _batch")
@@ -292,19 +316,22 @@ class DuckDBLoader:
             if measure not in self.spec.schema.names:
                 raise ValueError(f"colonne inconnue : {measure}")
             predicate = f" WHERE {measure} IS NOT NULL"
-        value = self._scalar(f"SELECT max({KEY_COLUMN}) FROM {self.qualified_table}{predicate}")
+        value = self._scalar(
+            f"SELECT max({self._instant_column}) FROM {self.qualified_table}{predicate}"
+        )
         if value is None:
             return None
         # DuckDB renvoie un datetime aware ; on force UTC pour comparer sans surprise.
         return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 
-    def count_distinct_keys(self, *, start: datetime, end: datetime) -> int:
+    def count_distinct_instants(self, *, start: datetime, end: datetime) -> int:
+        instant = self._instant_column
         if self._database_is_missing or not self._table_exists():
             return 0
         return self._scalar(
             f"""
-            SELECT count(DISTINCT {KEY_COLUMN}) FROM {self.qualified_table}
-            WHERE {KEY_COLUMN} >= $start AND {KEY_COLUMN} < $end
+            SELECT count(DISTINCT {instant}) FROM {self.qualified_table}
+            WHERE {instant} >= $start AND {instant} < $end
             """,
             {"start": start, "end": end},
         )
