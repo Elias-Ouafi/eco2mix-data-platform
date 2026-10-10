@@ -57,12 +57,12 @@ dépôt, lance une commande et passe l'adresse en argument.
 
 | # | Étape | Fini quand | Dépend de |
 |---|---|---|---|
-| 3.1 | Seed `profils_consommation` : courbes types normalisées (tertiaire, industriel 3×8, data center, froid alimentaire) | Quatre profils sélectionnables | — |
-| 3.2 | Vérifier la grille Tempo sur source officielle EDF/CRE | `tarifs_tempo.csv` sourcé et daté | — |
+| 3.1 | Seed `profils_consommation` : courbes types (tertiaire, industriel 3×8, data center, froid alimentaire) — **amorcé** (10 oct.) : un profil illustratif, bureau 36 kVA | Quatre profils sélectionnables | — |
+| 3.2 | ~~Vérifier la grille Tempo sur source officielle~~ — **fait** (10 oct.) : les 12 prix recalculés depuis les barèmes HT de la CRE (TTC = (HT + accise) × 1,20) | ~~`tarifs_tempo.csv` sourcé et daté~~ | — |
 | 3.3 | Seed `turpe` : barèmes TURPE 7 par domaine de tension (CRE, période août 2025 → juillet 2029) | Composantes fixes et variables par tension | — |
 | 3.4 | Identifiants API RTE Tempo (compte `data.rte-france.com`) | Le calendrier Tempo se charge sur données réelles | **action utilisateur** |
-| 3.5 | `fct_cout_horaire_profil` : coût créneau par créneau, fourniture + TURPE + taxes | Un profil est chiffré sur un mois |
-| 3.6 | `fct_gain_decalage` : économie et CO₂ évité d'un décalage de charge | Le meilleur créneau de décalage est identifié | 3.5 |
+| 3.5 | ~~`fct_cout_horaire_profil`~~ — **fait** (10 oct.) sur l'option HP/HC du tarif bleu non résidentiel (fourniture et TURPE inclus dans le TRV, plus l'accise, en € HTVA) | ~~Un profil est chiffré sur un mois~~ |
+| 3.6 | ~~Gain de décalage~~ — **fait** (10 oct.) dans `fct_cout_mensuel_profil` : report de la part flexible vers les heures creuses du jour. Constat : en été, ce report **augmente** les émissions | Le meilleur créneau de décalage est identifié | 3.5 |
 
 ### Lot 4 — Restitution en ligne de commande
 
@@ -129,8 +129,8 @@ quiconque clone le dépôt.
 | **2** | ~~Référentiel commune → département → région, et silver normalisée jointe **par code INSEE**~~ — **FAIT le 10 octobre 2026**. Repli au département quand la commune n'a pas de site, signalé dans la sortie. | Les sources écrivent `GRAND EST` et `Grand Est` : sans normalisation, la jointure perd des lignes en silence. | ~~½ journée~~ |
 | **3** | ~~`fct_diagnostic_territoire`~~ — **FAIT le 10 octobre 2026**, une ligne par **département** (voir 2.5), la commune jointe à la lecture | Le cœur du produit. Un `SELECT` par code INSEE doit suffire. | ~~1 journée~~ |
 | **4** | ~~`diagnose --adresse`~~ — **FAIT le 10 octobre 2026**, avec `--puissance` et les limites affichées | C'est le livrable visible, et la forme exacte que tu as fixée. | ~~½ journée~~ |
-| **5** | Coût horaire sur **un seul** profil type, avec la grille Tempo existante | Prouve le volet prix sans attendre les quatre profils ni le TURPE détaillé. | 1 journée |
-| **6** | Tests : dbt sur les nouvelles tables, pytest sur `diagnose` — **fait pour les étapes 2 à 4** (134 tests dbt, 33 tests pytest) ; reste l'étape 5 | La rigueur est l'argument de vente du dépôt ; une table gold sans test l'annule. | ½ journée |
+| **5** | ~~Coût horaire sur **un seul** profil type~~ — **FAIT le 10 octobre 2026**, sur l'option HP/HC (voie sans compte RTE) | Prouve le volet prix sans attendre les quatre profils ni le TURPE détaillé. | 1 journée |
+| **6** | ~~Tests : dbt sur les nouvelles tables, pytest sur `diagnose`~~ — **FAIT** (154 tests dbt, 41 tests pytest pour les étapes 2 à 5) | La rigueur est l'argument de vente du dépôt ; une table gold sans test l'annule. | ½ journée |
 | **7** | README : un exemple de diagnostic réel, de bout en bout, et le nouveau nom | Le dépôt doit se comprendre sans rien installer. | ½ journée |
 
 **Total : environ 4 à 5 jours à temps partiel.**
@@ -145,6 +145,11 @@ Le coût horaire a besoin des couleurs Tempo, donc d'un compte
 - **tu ne le crées pas** → repli sur une tarification Base ou HP/HC, chiffrée
   depuis le seed TURPE, sans dépendance externe. Moins parlant, mais le MVP
   tient quand même.
+
+**Décision du 10 octobre 2026 : HP/HC, sans compte RTE.** La grille vient
+directement des barèmes de la CRE (tarif bleu non résidentiel, 36 kVA), qui
+incluent déjà l'acheminement : le seed TURPE n'est pas nécessaire pour ce
+périmètre. Il le redeviendra pour les sites au-delà de 36 kVA (3.3).
 
 ### Ce qui vient juste après le MVP
 

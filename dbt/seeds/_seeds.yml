@@ -26,10 +26,10 @@ seeds:
       Grille réglementée de l'option Tempo (tarif bleu EDF), prix TTC du kWh par
       couleur de jour et période (hc : 22 h–6 h, hp : 6 h–22 h), puissance 6 kVA
       et plus. Validité `[date_debut, date_fin)`, `date_fin` vide pour la grille en
-      vigueur. Source : grilles publiées au 1er février et au 1er août 2026
-      (https://www.fournisseurs-electricite.com/fournisseurs/edf/tarifs/tempo/prix),
-      à vérifier et compléter à chaque mouvement tarifaire (en général 1er février
-      et 1er août). Hors de ces dates, les prix restent nuls dans les tables gold.
+      vigueur. Valeurs vérifiées le 10 octobre 2026 sur les barèmes officiels HT de la
+      CRE (annexe B des délibérations n° 2026-06 et n° 2026-147) : TTC = (HT + accise)
+      × 1,20. À compléter à chaque mouvement tarifaire (en général 1er février et
+      1er août). Hors de ces dates, les prix restent nuls dans les tables gold.
     config:
       column_types:
         date_debut: date
@@ -122,3 +122,71 @@ seeds:
         data_tests: [unique, not_null]
       - name: limite
         data_tests: [not_null]
+
+  - name: tarifs_hphc
+    description: >
+      Option Heures Creuses du tarif bleu **non résidentiel**, 36 kVA, en France
+      métropolitaine continentale. Prix HT du kWh par période (hp, hc) et accise sur
+      l'électricité (≤ 36 kVA), validité `[date_debut, date_fin)`. Le prix payé par une
+      entreprise, qui récupère la TVA, est `prix_ht + accise` (€ HTVA) ; l'abonnement 36 kVA
+      HT est donné pour information. Sources officielles : barèmes de l'annexe B des
+      délibérations de la CRE n° 2026-06 du 14 janvier 2026 (au 1er février 2026, page 12)
+      et n° 2026-147 du 15 juillet 2026 (au 1er août 2026, page 14), entérinées par décision
+      ministérielle du 29 juillet 2026 ; accise de 30,85 puis 30,62 €/MWh (loi de finances
+      pour 2026). À compléter à chaque mouvement tarifaire.
+    config:
+      column_types:
+        date_debut: date
+        date_fin: date
+        prix_ht_eur_kwh: double
+        accise_eur_kwh: double
+        abonnement_36kva_ht_eur_an: double
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [date_debut, periode]
+    columns:
+      - name: periode
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [hc, hp]
+      - name: prix_ht_eur_kwh
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: profils_consommation
+    description: >
+      Profils de consommation types : puissance appelée (kW) par plage horaire locale
+      `[heure_debut, heure_fin)`, distinguant jours ouvrés et week-end.
+      `puissance_flexible_kw` est la part déplaçable (recharge de véhicules, eau chaude,
+      froid stockable). Profil **illustratif**, construit pour la démonstration, pas une
+      courbe mesurée : environ 115 MWh par an pour un bureau de 36 kVA.
+    config:
+      column_types:
+        heure_debut: integer
+        heure_fin: integer
+        puissance_kw: double
+        puissance_flexible_kw: double
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [profil, type_jour, heure_debut]
+    columns:
+      - name: type_jour
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [ouvre, week_end]
+      - name: puissance_flexible_kw
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 0

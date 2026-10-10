@@ -13,6 +13,9 @@ Points de conception :
   35 000). Sinon, le diagnostic le dit et s'en tient au département.
 * **Arrondissements.** La BAN renvoie le code de l'arrondissement (69383 pour
   Lyon 3e) ; ODRÉ publie Paris, Lyon et Marseille sous le code de la commune.
+* **Coût d'un profil type, pas d'une adresse.** Le prix est péréqué : le
+  coût horaire d'un profil (`gold.fct_cout_mensuel_profil`) est le même partout,
+  et le diagnostic le présente comme tel, sur le dernier mois complet et tarifé.
 * **Aucun chiffre sans sa limite.** Chaque bloc de la sortie texte est suivi de
   la limite correspondante, lue dans `gold.limites_methodologiques`.
 """
@@ -53,6 +56,33 @@ where $puissance >= puissance_min_mw
 """
 
 
+#: Profil type chiffré par défaut (seed `profils_consommation`).
+PROFIL_DEFAUT = "bureau_36kva"
+
+_COUT_SQL = """
+select
+    cout.mois,
+    profil.libelle,
+    cout.conso_kwh,
+    cout.part_hc,
+    cout.cout_htva_eur,
+    cout.prix_moyen_htva_eur_kwh,
+    cout.intensite_moyenne_g_kwh,
+    cout.kwh_decales,
+    cout.gain_decalage_eur,
+    cout.co2_evite_kg
+from gold.fct_cout_mensuel_profil as cout
+inner join (
+    select distinct profil, libelle from gold.profils_consommation
+) as profil on profil.profil = cout.profil
+where cout.profil = $profil
+  and cout.est_complet
+  and cout.cout_htva_eur is not null
+order by cout.mois desc
+limit 1
+"""
+
+
 class DiagnosticIndisponibleError(RuntimeError):
     """Le warehouse ne permet pas de produire le diagnostic."""
 
@@ -80,6 +110,22 @@ class Seuil:
     domaine_tension: str
     gestionnaire: str
     commentaire: str
+
+
+@dataclass(frozen=True, slots=True)
+class CoutProfil:
+    """Bilan du dernier mois complet et tarifé d'un profil type."""
+
+    mois: date
+    libelle: str
+    conso_kwh: float
+    part_hc: float
+    cout_htva_eur: float
+    prix_moyen_htva_eur_kwh: float
+    intensite_moyenne_g_kwh: float
+    kwh_decales: float
+    gain_decalage_eur: float
+    co2_evite_kg: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +168,7 @@ class Diagnostic:
     energie_non_evacuee_mwh: float | None
     # Raccordement et limites
     seuil: Seuil | None
+    cout: CoutProfil | None
     limites: dict[str, str]
 
     @property
@@ -155,6 +202,7 @@ def lire_diagnostic(
                 connection, _DIAGNOSTIC_SQL, {"commune": commune, "departement": departement}
             )
             seuil = _seuil(connection, puissance_mw) if puissance_mw is not None else None
+            cout_ligne = _une_ligne(connection, _COUT_SQL, {"profil": PROFIL_DEFAUT})
             limites = dict(
                 connection.execute(
                     "select indicateur, limite from gold.limites_methodologiques"
@@ -173,6 +221,7 @@ def lire_diagnostic(
         territoire=territoire,
         code_insee_commune=commune,
         seuil=seuil,
+        cout=None if cout_ligne is None else CoutProfil(**cout_ligne),
         limites=limites,
         **ligne,
     )
@@ -300,7 +349,45 @@ def formater_diagnostic(diagnostic: Diagnostic) -> str:
     else:
         lignes.append("   Préciser --puissance (en MW) pour connaître le domaine de tension.")
     limite("capacite_raccordement")
+
+    # 4. Coût d'un profil type
+    lignes += ["", "4. Coût horaire d'un profil type (identique sur tout le territoire)"]
+    if d.cout is None:
+        lignes.append("   Aucun mois complet et tarifé : charger les données nationales récentes.")
+    else:
+        c = d.cout
+        lignes += [
+            f"   {c.libelle}, {_MOIS[c.mois.month - 1]} {c.mois.year},"
+            " option Heures Creuses du tarif bleu non résidentiel",
+            f"   {_nombre(c.conso_kwh)} kWh, dont {_nombre(c.part_hc * 100)} % en heures creuses :"
+            f" {_nombre(c.cout_htva_eur)} € HTVA, soit {_nombre(c.prix_moyen_htva_eur_kwh, 4)}"
+            f" €/kWh ; {_nombre(c.intensite_moyenne_g_kwh)} gCO₂/kWh en moyenne",
+            f"   Décaler {_nombre(c.kwh_decales)} kWh flexibles vers les heures creuses :"
+            f" {_nombre(c.gain_decalage_eur)} € économisés, {_co2_evite(c.co2_evite_kg)}",
+        ]
+        if d.est_zni:
+            lignes.append(
+                "   Barème de métropole continentale : la Corse et l'outre-mer ont leurs propres"
+                " barèmes réglementés."
+            )
+    limite("cout_profil")
     return "\n".join(lignes)
+
+
+_MOIS = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+]  # fmt: skip
+
+
+def _co2_evite(kg: float) -> str:
+    """Le décalage vers la nuit peut **augmenter** les émissions en été (solaire de midi)."""
+    if kg >= 0:
+        return f"{_nombre(kg, 1)} kgCO₂ évités"
+    return (
+        f"mais {_nombre(-kg, 1)} kgCO₂ émis en plus : les heures creuses de nuit sont"
+        " plus carbonées que la mi-journée solaire"
+    )
 
 
 _STATUTS = {"excedentaire": "excédentaire", "deficitaire": "déficitaire"}
