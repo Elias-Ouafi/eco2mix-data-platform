@@ -133,7 +133,7 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 | **Parquet** (pyarrow) | Zone bronze immuable, partitionnée par date d'ingestion | Format colonne typé, lisible par DuckDB aujourd'hui et par BigQuery demain |
 | **httpx** + **tenacity** | Appels HTTP, retry exponentiel, timeouts | `tenacity` évite d'écrire une boucle de retry à la main |
 | **pydantic-settings** | Configuration typée depuis l'environnement | Valide les réglages au démarrage plutôt qu'au premier appel |
-| **pytest** + **pytest-httpx** | 161 tests, aucun appel réseau réel | L'interception au niveau du transport garantit qu'aucun test ne sort |
+| **pytest** + **pytest-httpx** | 169 tests, aucun appel réseau réel | L'interception au niveau du transport garantit qu'aucun test ne sort |
 | **ruff** | Lint et format | Un seul outil pour les deux |
 | **matplotlib** + **reportlab** | Graphiques et PDF du rapport | Importés paresseusement : ils ne pèsent que sur la commande de rapport |
 
@@ -164,22 +164,23 @@ un coût horaire de profil en sortie, produits par un pipeline qui tourne sans i
 | Brique | Vérifié par |
 |---|---|
 | Ingestion éCO2mix (temps réel, consolidé/définitif) : API ODRÉ → Parquet → DuckDB | Tests sans réseau ; exécutée contre l'API réelle |
-| Architecture médaillon : bronze (Python), silver et gold (dbt-duckdb) | 134 tests de données dbt, verts sur les données réelles |
+| Architecture médaillon : bronze (Python), silver et gold (dbt-duckdb) | 154 tests de données dbt, verts sur les données réelles |
 | Historique complet 2012 → aujourd'hui (2 appels API) | Série continue, bilans annuels conformes aux chiffres publiés par RTE |
 | Calendrier Tempo (API RTE, OAuth2) et grille tarifaire | Tests sur réponses simulées |
 | Rapport mensuel PDF et Markdown (`report --format pdf/md`) | Tests de bout en bout ; généré sur septembre 2026 réel, sans prix |
 | Trois DAGs Airflow (horaire, consolidation mensuelle, rapport à la demande) | Import et structure vérifiés en CI (Airflow 2.10) |
 | **Diagnostic par adresse** (`diagnose --adresse --puissance`) : pression industrielle, tension régionale, seuil de raccordement, limites | 33 tests ; exécuté sur des adresses réelles (Lyon, Fos-sur-Mer, Ajaccio) |
-| Qualité | 161 tests pytest, ruff, CI GitHub Actions verte |
+| **Coût horaire d'un profil type** : bureau 36 kVA chiffré heure par heure sur la grille HP/HC non résidentielle officielle (CRE), carbone, gain d'un décalage vers les heures creuses | 8 tests ; chiffré sur février → septembre 2026 réels |
+| Grilles tarifaires Tempo et HP/HC vérifiées sur les barèmes officiels de la CRE (délibérations n° 2026-06 et 2026-147) | Les 12 prix Tempo du seed retrouvés au dix-millième d'euro près depuis les prix HT |
+| Qualité | 169 tests pytest, ruff, CI GitHub Actions verte |
 
 ### Pas encore validé en conditions réelles
 
 - **Airflow n'a jamais tourné** : `astro dev start` n'a pas encore été lancé (Docker Desktop
   manquait sur le poste de développement). Le projet Astro est prêt (`airflow/.astro/config.yaml`).
 - **Les prix Tempo n'ont jamais été calculés sur des données réelles** : il faut des identifiants
-  de l'API RTE. Le client n'est testé que sur des réponses simulées.
-- **La grille tarifaire** (`dbt/seeds/tarifs_tempo.csv`) a été relevée sur un comparateur ; elle
-  reste à vérifier sur la source officielle (EDF / CRE).
+  de l'API RTE. Le client n'est testé que sur des réponses simulées. Le MVP s'en passe : le coût
+  horaire est chiffré sur l'option Heures Creuses, qui ne dépend d'aucun calendrier.
 
 ### Reste à faire
 
@@ -191,7 +192,7 @@ Le socle technique est réutilisé tel quel ; ce qui change est le périmètre f
 | 2 | **Ingérer les jeux territoriaux** — *fait pour les trois jeux du MVP* (9 oct.) : sources dbt déclarées, 17 656 lignes IRIS (2012→2023), 1 872 équilibres régionaux, 12 relevés de contraintes, 74 tests dbt verts. *Reporté hors MVP* : `eco2mix-regional-cons-def` (2,86 M lignes) | Les jeux du MVP sont en bronze, testés |
 | 3 | ~~**Géocodage d'adresse**~~ — **fait** (9 octobre 2026) : `ingestion/geocode.py`, commande `geocode --adresse`, 17 tests, vérifié contre la BAN réelle | ~~Une adresse résout son territoire, hors ligne en test~~ |
 | 4 | ~~**Gold : table de diagnostic par territoire**~~ — **fait** (10 octobre 2026) : référentiel commune → département → région, `fct_diagnostic_territoire` (une ligne par département, la commune en complément), seuils de raccordement, limites méthodologiques ; commande `diagnose`. *Mix régional* reporté avec `eco2mix-regional-cons-def` | ~~Une requête par code INSEE renvoie le diagnostic complet~~ |
-| 5 | **Coût horaire sur profil** : profils de consommation types, grille Tempo et TURPE vérifiées sur sources officielles | Un profil donné est chiffré créneau par créneau, avec le gain d'un décalage |
+| 5 | ~~**Coût horaire sur profil**~~ — **fait** (10 octobre 2026) sur un profil type et l'option HP/HC, sans compte RTE ; grilles vérifiées sur les barèmes CRE. *Reste* : les autres profils et le TURPE détaillé pour les sites > 36 kVA | ~~Un profil donné est chiffré créneau par créneau, avec le gain d'un décalage~~ |
 | 6 | **Rapport d'implantation par adresse** (reprend le moteur du rapport mensuel) | Un PDF est produit pour une adresse saisie, limites méthodologiques affichées |
 | 7 | Fiabilité : alerte en cas d'échec d'une tâche, `main` protégée (CI obligatoire) | Un échec simulé déclenche l'alerte |
 | 8 | Exploitation sur 7 jours, puis chiffres clés restants | Le tableau des [chiffres clés](#chiffres-clés) est complet |
@@ -338,6 +339,12 @@ Commune Lyon (69123) · Rhône (69) · Auvergne-Rhône-Alpes (84)
    Puissance 12 MW → HTA, Enedis (ou ELD) : Raccordement en moyenne tension (20 kV), souvent sur un départ dédié au-delà de quelques MW
    ↳ Limite : Indicatif : 1 kVA est assimilé à 1 kW. Le domaine de tension réel est fixé par le gestionnaire lors de l'étude de raccordement.
    ↳ Limite : La capacité de raccordement disponible pour la consommation n'est pas publiée en open data (Caparéseau ne couvre que l'injection). Seule une étude de raccordement RTE ou Enedis fait foi.
+
+4. Coût horaire d'un profil type (identique sur tout le territoire)
+   Bureau tertiaire, 36 kVA, septembre 2026, option Heures Creuses du tarif bleu non résidentiel
+   9 600 kWh, dont 15 % en heures creuses : 1 586 € HTVA, soit 0,1652 €/kWh ; 22 gCO₂/kWh en moyenne
+   Décaler 528 kWh flexibles vers les heures creuses : 22 € économisés, mais 1,4 kgCO₂ émis en plus : les heures creuses de nuit sont plus carbonées que la mi-journée solaire
+   ↳ Limite : Le prix est identique en tout point du territoire (péréquation tarifaire) : ce coût ne dépend pas de l'adresse. Profil illustratif, heures creuses supposées de 22 h à 6 h (en réalité fixées localement par le gestionnaire de réseau), jours fériés comptés comme ouvrés, abonnement exclu. Carbone : intensité nationale, faute d'intensité régionale opposable.
 ```
 
 Ce que la sortie fait, et pourquoi :
@@ -349,6 +356,10 @@ Ce que la sortie fait, et pourquoi :
 - **Millésime 2021, pas 2023.** Depuis 2022, ~40 % des IRIS sont masqués par le secret
   statistique : sur 2023, le Nord tomberait de 8,7 à 2,3 TWh et la Savoie de 3,8 à 0,9 TWh. Le
   millésime retenu est le dernier publié en entier, calculé par dbt, pas codé en dur.
+- **Le coût ne dépend pas de l'adresse, et la sortie le dit.** Le tarif est péréqué : le bloc 4
+  chiffre un profil type, le même partout. Le report vers les heures creuses fait gagner de
+  l'argent, mais en été il **augmente** les émissions : la nuit est plus carbonée que la
+  mi-journée solaire. Le diagnostic l'affiche au lieu de promettre un CO₂ évité.
 - **Pas de chiffre sans sa limite.** Chaque bloc est suivi de la limite lue dans
   `gold.limites_methodologiques`, et la capacité de raccordement, absente de l'open data,
   renvoie toujours vers l'étude RTE ou Enedis.
@@ -561,9 +572,10 @@ uv run pytest
 | [`test_extract_rte.py`](ingestion/tests/test_extract_rte.py) | Jeton OAuth (Basic, réutilisé), découpage des plages, dates futures, retry, couleurs inconnues |
 | [`test_report.py`](ingestion/tests/test_report.py) | Épisodes de pic, meilleur créneau bleu HC, économie estimée, repli sans prix, PDF et Markdown écrits (graphiques, liens relatifs, version texte seul) |
 | [`test_diagnostic.py`](ingestion/tests/test_diagnostic.py) | Codes IRIS tronqués et doublons vides, communes reconstituées, arrondissements, Corse, millésime sans secret, fenêtre de 12 mois, seuils de raccordement aux bornes, limites toutes affichées, commande `diagnose` de bout en bout |
+| [`test_cout_profil.py`](ingestion/tests/test_cout_profil.py) | Prix HP et HC aux bonnes heures, dimanche de 25 h compté en entier, mois hors grille sans coût, gain de décalage, CO₂ « évité » négatif affiché comme tel |
 | [`test_dbt.py`](ingestion/tests/test_dbt.py) | `dbt build` de bronze à gold : lignes vides écartées, bascule consolidé → temps réel sans double comptage, jour de 25 h, premier run sans consolidé |
 
-Les 134 tests de données dbt (unicité, valeurs admises, bornes, intégrité référentielle, absence
+Les 154 tests de données dbt (unicité, valeurs admises, bornes, intégrité référentielle, absence
 de chevauchement entre mesures, hiérarchie territoriale conforme aux codes publiés) tournent à chaque `dbt build`, donc à chaque run des DAGs.
 
 **Aucun test n'appelle l'API réelle** : `pytest-httpx` intercepte au niveau du transport, et un

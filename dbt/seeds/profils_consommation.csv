@@ -1,0 +1,9 @@
+profil,libelle,type_jour,heure_debut,heure_fin,puissance_kw,puissance_flexible_kw
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,0,6,6,0
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,6,8,12,0
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,8,12,28,6
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,12,14,24,0
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,14,18,28,0
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,18,20,14,0
+bureau_36kva,"Bureau tertiaire, 36 kVA",ouvre,20,24,6,0
+bureau_36kva,"Bureau tertiaire, 36 kVA",week_end,0,24,6,0

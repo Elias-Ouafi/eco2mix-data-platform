@@ -58,6 +58,15 @@ bronze.energies_et_puissances_…_contraintes ► silver.contraintes_reseau_regi
 | `gold.seuils_raccordement` | tranche de puissance | Domaine de tension et gestionnaire (Enedis / RTE), zone grise 20–40 MW |
 | `gold.limites_methodologiques` | indicateur | Source, maille, millésime et limite de chaque indicateur |
 
+### Coût horaire d'un profil type
+
+| Modèle | Grain | Rôle |
+|---|---|---|
+| `gold.tarifs_hphc` | grille × période | Option Heures Creuses du tarif bleu non résidentiel 36 kVA, prix HT et accise (barèmes CRE) |
+| `gold.profils_consommation` | profil × type de jour × plage | Puissance appelée et part flexible (seed illustratif) |
+| `gold.fct_cout_horaire_profil` | profil × heure | Énergie, prix et coût € HTVA, émissions (intensité nationale) |
+| `gold.fct_cout_mensuel_profil` | profil × mois | Bilan mensuel, `est_complet`, gain et CO₂ d'un report vers les heures creuses |
+
 ## Décisions de modélisation
 
 - **Arbitrage par période, pas par pas de temps.** Le consolidé ne mesure qu'à la demi-heure ;

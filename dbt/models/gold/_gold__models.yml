@@ -150,3 +150,46 @@ models:
               arguments:
                 to: ref('dim_departement')
                 field: code_departement
+
+  - name: fct_cout_horaire_profil
+    description: >
+      Coût (€ HTVA, option Heures Creuses non résidentielle) et carbone d'un profil type,
+      heure par heure. Ne dépend pas de l'adresse : prix péréqué, intensité nationale.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [profil, heure_utc]
+    columns:
+      - name: conso_kwh
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 0
+      - name: prix_htva_eur_kwh
+        description: Nul hors de la grille `tarifs_hphc`.
+
+  - name: fct_cout_mensuel_profil
+    description: >
+      Bilan mensuel d'un profil type : consommation, part en heures creuses, coût HTVA,
+      émissions, et gain d'un report de la part flexible vers les heures creuses.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [profil, mois]
+    columns:
+      - name: est_complet
+        description: Toutes les heures du mois (heure de Paris) sont mesurées.
+      - name: part_hc
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: cout_htva_eur
+        description: Nul si une heure du mois est hors grille tarifaire.
+      - name: gain_decalage_eur
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
