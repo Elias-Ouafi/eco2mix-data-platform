@@ -8,6 +8,7 @@
     python -m ingestion.cli freshness
     python -m ingestion.cli coverage
     python -m ingestion.cli geocode --adresse "12 rue de la Paix, 69003 Lyon"
+    python -m ingestion.cli diagnose --adresse "12 rue de la Paix, 69003 Lyon" --puissance 5
     python -m ingestion.cli tempo --month 2026-09        # calendrier Tempo (API RTE)
     python -m ingestion.cli report --month 2026-09       # rapport PDF du mois
     python -m ingestion.cli report --month 2026-09 --format md   # même rapport en Markdown
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from ingestion.config import get_settings
 from ingestion.datasets import NATIONAL_CONS_DEF, NATIONAL_TR, SPECS, get_spec
+from ingestion.diagnostic import DiagnosticIndisponibleError, formater_diagnostic, lire_diagnostic
 from ingestion.extract_odre import ExtractionWindow
 from ingestion.extract_rte import DayRange, RteCredentialsMissingError
 from ingestion.geocode import GeocodingError, geocode
@@ -66,6 +68,16 @@ def _parse_month(value: str) -> date:
         return datetime.strptime(value, "%Y-%m").date()
     except ValueError:
         raise argparse.ArgumentTypeError(f"mois invalide : {value!r} (AAAA-MM)") from None
+
+
+def _parse_puissance(value: str) -> float:
+    try:
+        puissance = float(value.replace(",", "."))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"puissance invalide : {value!r} (MW)") from None
+    if puissance < 0:
+        raise argparse.ArgumentTypeError("la puissance doit être positive")
+    return puissance
 
 
 def _add_dataset_option(parser: argparse.ArgumentParser, default: str) -> None:
@@ -114,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     geocode_cmd.add_argument(
         "--adresse", required=True, help="adresse à résoudre, entre guillemets"
+    )
+
+    diagnose = subparsers.add_parser(
+        "diagnose", help="diagnostic d'implantation électrique d'une adresse"
+    )
+    diagnose.add_argument("--adresse", required=True, help="adresse à diagnostiquer")
+    diagnose.add_argument(
+        "--puissance", type=_parse_puissance, help="puissance du projet en MW (ex. 0.5, 12)"
     )
 
     coverage = subparsers.add_parser(
@@ -195,6 +215,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"precision / score : {territoire.precision} / {territoire.score:.2f}",
             ]
             print("\n".join(lignes))
+        case "diagnose":
+            try:
+                territoire = geocode(args.adresse, settings=settings)
+                diagnostic = lire_diagnostic(
+                    territoire, puissance_mw=args.puissance, settings=settings
+                )
+            except (GeocodingError, DiagnosticIndisponibleError) as error:
+                logger.error("diagnostic impossible : %s", error)
+                return 1
+            # Sortie redirigée sous Windows : cp1252 ne connaît ni « → » ni « ≤ ».
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8")
+            print(formater_diagnostic(diagnostic))
         case "tempo":
             if args.month:
                 days = tempo_days_for_month(args.month)

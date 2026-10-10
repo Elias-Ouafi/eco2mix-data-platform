@@ -91,3 +91,78 @@ models:
           - accepted_values:
               arguments:
                 values: [bleu, blanc, rouge]
+
+  - name: conso_industrielle_iris
+    description: >
+      Consommation électrique annuelle des sites raccordés au transport, par IRIS,
+      code IRIS complété sur 9 caractères et commune reconstituée quand ODRÉ ne la
+      publie pas. Hiérarchie commune → département → région résolue localement.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [annee, code_iris]
+    columns:
+      - name: annee
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 2011
+                max_value: 2030
+      - name: code_iris
+        data_tests:
+          - not_null
+          - exact_length:
+              arguments:
+                length: 9
+      - name: code_insee_commune
+        data_tests: [not_null]
+      - name: code_departement
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_departement')
+                field: code_departement
+      - name: code_insee_region
+        description: Issu du référentiel `dim_departement`, jamais du libellé publié.
+        data_tests: [not_null]
+      - name: consommation_electricite_mwh
+        description: MWh par an. Nulle = secret statistique (voir `est_secret`).
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: equilibre_regional_mensuel
+    description: Équilibre production / consommation brute par région et par mois, en MWh.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [mois, code_insee_region]
+    columns:
+      - name: mois
+        description: Premier jour du mois.
+        data_tests: [not_null]
+      - name: code_insee_region
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_region')
+                field: code_insee_region
+      - name: consommation_brute_mwh
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: contraintes_reseau_region
+    description: >
+      Contraintes d'évacuation du réseau de transport par région, code INSEE retrouvé
+      depuis le libellé publié en majuscules.
+    columns:
+      - name: code_insee_region
+        description: Nul si le libellé publié n'a pas été reconnu — le test l'interdit.
+        data_tests: [unique, not_null]
