@@ -75,3 +75,78 @@ models:
                 values: [bleu, blanc, rouge]
       - name: prix_ttc_eur_kwh
         description: Nul sans couleur Tempo ou hors de la grille `tarifs_tempo`.
+
+  - name: fct_pression_industrielle_commune
+    description: >
+      Consommation électrique des sites raccordés au transport, par commune, pour la
+      dernière année publiée sans secret statistique. Seules les communes ayant au moins un IRIS publié y
+      figurent.
+    columns:
+      - name: code_insee_commune
+        data_tests: [unique, not_null]
+      - name: est_minorant
+        description: Vrai si au moins un IRIS est sous secret statistique.
+
+  - name: fct_pression_industrielle_departement
+    description: >
+      Pression industrielle par département (dernière année sans secret statistique), une ligne pour
+      chacun des 101 départements, rang national compris.
+    columns:
+      - name: code_departement
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_departement')
+                field: code_departement
+      - name: consommation_electricite_mwh
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 0
+      - name: rang_national
+        description: 1 = département le plus consommateur ; nul sans site raccordé.
+
+  - name: fct_tension_reseau_region
+    description: >
+      Tension du réseau par région : équilibre production / consommation sur 12 mois
+      glissants et contraintes d'évacuation RTE. Une ligne par région du référentiel.
+    columns:
+      - name: code_insee_region
+        data_tests: [unique, not_null]
+      - name: nb_mois
+        description: Mois couverts dans la fenêtre ; 12 attendu en métropole.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 12
+      - name: taux_couverture
+        description: Production / consommation brute ; sous 1, la région importe.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 20
+      - name: statut_equilibre
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [excedentaire, deficitaire]
+
+  - name: fct_diagnostic_territoire
+    description: >
+      Diagnostic de contexte d'implantation, une ligne par département : pression
+      industrielle du département et tension du réseau de sa région. La commune
+      s'ajoute par jointure sur `fct_pression_industrielle_commune`.
+    columns:
+      - name: code_departement
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_departement')
+                field: code_departement

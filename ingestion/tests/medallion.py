@@ -9,7 +9,13 @@ observés sur les API :
 * le temps réel publie sa ligne la plus récente « à blanc » ;
 * les deux datasets se recouvrent dans le temps ;
 * un jour de changement d'heure dure 25 h ;
-* un jour Tempo court de 6 h à 6 h, à cheval sur deux jours civils.
+* un jour Tempo court de 6 h à 6 h, à cheval sur deux jours civils ;
+* des codes IRIS publiés sur 8 caractères (zéro de tête perdu), sans commune, et
+  parfois en doublon vide d'une ligne correctement codée ;
+* Paris, Lyon et Marseille publiés sous le code de la commune, pas de
+  l'arrondissement ;
+* une année récente partiellement masquée par le secret statistique ;
+* une région identifiée par son libellé en majuscules, et non par son code.
 
 Silver et gold sont ensuite construites par `dbt build`, lancé en sous-processus
 comme le fait le DAG : dbt-duckdb garde sa connexion ouverte dans le processus
@@ -28,7 +34,15 @@ from pathlib import Path
 from typing import Any
 
 from ingestion.config import Settings
-from ingestion.datasets import NATIONAL_CONS_DEF, NATIONAL_TR, RTE_TEMPO, DatasetSpec
+from ingestion.datasets import (
+    CONSO_IRIS,
+    CONTRAINTES_REGIONALES,
+    EQUILIBRE_REGIONAL,
+    NATIONAL_CONS_DEF,
+    NATIONAL_TR,
+    RTE_TEMPO,
+    DatasetSpec,
+)
 from ingestion.pipeline import ensure_bronze_tables
 from ingestion.transform import PARIS_TZ, records_to_table, write_parquet
 from ingestion.warehouse import DuckDBLoader
@@ -131,6 +145,103 @@ def tempo() -> list[dict[str, Any]]:
     ]
 
 
+# --- Jeux territoriaux ---------------------------------------------------------
+
+#: Année complète, retenue comme millésime de référence : 2022 a du secret statistique.
+ANNEE_REFERENCE = 2021
+
+
+def _iris(
+    annee: int,
+    code_iris: str,
+    conso: float | None,
+    sites: float | None,
+    *,
+    commune: tuple[str, str, str, str] | None = None,
+) -> dict[str, Any]:
+    """`commune` = (code commune, nom, code département, code région), ou rien."""
+    record: dict[str, Any] = {
+        "annee": str(annee),
+        "code_iris": code_iris,
+        "consommation_electricite_rte": conso,
+        "pdl_electricite_rte": sites,
+    }
+    if commune is not None:
+        code_commune, nom, departement, region = commune
+        record |= {
+            "code_insee_commune": code_commune,
+            "commune": nom,
+            "code_insee_departement": departement,
+            "code_insee_region": region,
+        }
+    return record
+
+
+LYON = ("69123", "Lyon", "69", "84")
+VILLEURBANNE = ("69266", "Villeurbanne", "69", "84")
+AJACCIO = ("2A004", "Ajaccio", "2A", "94")
+SAINT_MAURICE = ("01376", "Saint-Maurice-de-Beynost", "01", "84")
+
+
+def conso_iris() -> list[dict[str, Any]]:
+    """MWh par an. Département 69 en 2021 : 40 000 + 60 000 MWh, 3 sites, 2 communes."""
+    return [
+        # 2021, millésime complet.
+        _iris(2021, "693830101", 40_000.0, 1.0, commune=LYON),  # IRIS d'arrondissement
+        _iris(2021, "692660000", 60_000.0, 2.0, commune=VILLEURBANNE),
+        _iris(2021, "20030000", 10_000.0, 1.0),  # 020030000, Aisne, commune non publiée
+        _iris(2021, "751010101", 5_000.0, 1.0),  # Paris 1er, commune non publiée
+        _iris(2021, "2A0040000", 3_000.0, 1.0, commune=AJACCIO),
+        # 2022, plus récent mais partiellement masqué.
+        _iris(2022, "693830101", None, None, commune=LYON),
+        _iris(2022, "692660000", 99_000.0, 2.0, commune=VILLEURBANNE),
+        _iris(2022, "013760000", 7_000.0, 1.0, commune=SAINT_MAURICE),
+        _iris(2022, "13760000", None, None),  # doublon vide du précédent
+    ]
+
+
+def equilibre_regional() -> list[dict[str, Any]]:
+    """13 mois, de décembre 2024 à décembre 2025 : la fenêtre n'en retient que 12.
+
+    Décembre 2024 porte une production aberrante, qui fausserait tout s'il était compté.
+    """
+    regions = {"84": 200.0, "11": 10.0, "94": 70.0}  # production mensuelle, conso = 100
+    mois = ["2024-12"] + [f"2025-{m:02d}" for m in range(1, 13)]
+    return [
+        {
+            "mois": m,
+            "code_insee_region": code_region,
+            "production_totale": 1e9 if m == "2024-12" else production,
+            "consommation_brute": 100.0,
+        }
+        for m in mois
+        for code_region, production in regions.items()
+    ]
+
+
+def contraintes_regionales() -> list[dict[str, Any]]:
+    return [
+        {
+            "region": "AUVERGNE-RHÔNE-ALPES",
+            "puissance_enr_installee": 14_575.0,
+            "puissance_totale_a_compenser": 187.0,
+            "energie_non_evacuee_moyenne_printemps": 222.0,
+            "energie_non_evacuee_moyenne_ete": 2_150.0,
+            "energie_non_evacuee_moyenne_automne": 155.0,
+            "energie_non_evacuee_moyenne_hiver": 250.0,
+        },
+        {
+            "region": "ÎLE-DE-FRANCE",
+            "puissance_enr_installee": 786.0,
+            "puissance_totale_a_compenser": 0.0,
+            "energie_non_evacuee_moyenne_printemps": 0.0,
+            "energie_non_evacuee_moyenne_ete": 0.0,
+            "energie_non_evacuee_moyenne_automne": 0.0,
+            "energie_non_evacuee_moyenne_hiver": 0.0,
+        },
+    ]
+
+
 def load_bronze(
     database: Path, tmp_path: Path, spec: DatasetSpec, records: list[dict[str, Any]]
 ) -> None:
@@ -172,6 +283,9 @@ def build_warehouse(tmp_path: Path, *, with_tempo: bool = True) -> Path:
     load_bronze(database, tmp_path, NATIONAL_TR, temps_reel())
     if with_tempo:
         load_bronze(database, tmp_path, RTE_TEMPO, tempo())
+    load_bronze(database, tmp_path, CONSO_IRIS, conso_iris())
+    load_bronze(database, tmp_path, EQUILIBRE_REGIONAL, equilibre_regional())
+    load_bronze(database, tmp_path, CONTRAINTES_REGIONALES, contraintes_regionales())
     ensure_bronze_tables(settings=Settings(_env_file=None, duckdb_path=database))
     dbt_build(database, tmp_path)
     return database

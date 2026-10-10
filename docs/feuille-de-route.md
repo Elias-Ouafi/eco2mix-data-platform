@@ -38,20 +38,20 @@ dépôt, lance une commande et passe l'adresse en argument.
 | 1.3 | ~~Charger `equilibre-regional-mensuel` et `contraintes-regionales`~~ — **fait** (9 oct.) : 1 872 et 12 lignes | ~~Tables bronze peuplées~~ | 1.1 |
 | 1.4 | ~~Ajouter les trois specs à `BRONZE_SPECS`~~ — **fait** (9 oct.) | ~~Les tables existent dès le premier run~~ | 1.1 |
 | 1.5 | Charger `eco2mix-regional-cons-def` (2,86 M lignes, 1 appel export) | Série régionale au pas 15 min disponible | 1.1 |
-| 1.6 | Référentiel territoires : commune → département → région (codes INSEE) | Un `code_insee_commune` résout sa hiérarchie sans appel réseau | — |
-| 1.7 | Silver : normaliser les noms de région et joindre **par code INSEE**, jamais par libellé | Les trois jeux se joignent sans perte | 1.2, 1.3, 1.6 |
-| 1.8 | Tests dbt sur les nouvelles tables silver (unicité, non-nullité, plages) | Tests verts sur données réelles | 1.7 |
+| 1.6 | ~~Référentiel territoires : commune → département → région~~ — **fait** (10 oct.) : seeds `dim_region`, `dim_departement`, macro `code_departement` | ~~Un `code_insee_commune` résout sa hiérarchie sans appel réseau~~ | — |
+| 1.7 | ~~Silver : normaliser les noms de région et joindre **par code INSEE**~~ — **fait** (10 oct.), plus trois réparations découvertes sur les données réelles : codes IRIS tronqués à 8 caractères, doublons vides, communes non publiées | ~~Les trois jeux se joignent sans perte~~ | 1.2, 1.3, 1.6 |
+| 1.8 | ~~Tests dbt sur les nouvelles tables silver~~ — **fait** (10 oct.) : 134 tests verts sur données réelles, dont la conformité de la hiérarchie aux codes publiés | ~~Tests verts sur données réelles~~ | 1.7 |
 
 ### Lot 2 — Couche de diagnostic (gold)
 
 | # | Étape | Fini quand |
 |---|---|---|
-| 2.1 | `fct_pression_industrielle_commune` : consommation et nombre de sites industriels raccordés au transport, par commune et par département | Une requête par code INSEE renvoie la pression locale |
-| 2.2 | `fct_tension_reseau_region` : excédent/déficit mensuel, puissance à compenser, énergie non évacuée par saison | Les régions se classent par tension |
-| 2.3 | `dim_seuil_raccordement` : règles Enedis (< 40 MW) / RTE (≥ 40 MW), zone grise 20–40 MW | Une puissance de projet renvoie le gestionnaire et le niveau de tension |
+| 2.1 | ~~`fct_pression_industrielle_commune` et `_departement`~~ — **fait** (10 oct.), millésime = dernière année sans secret statistique (2021) | ~~Une requête par code INSEE renvoie la pression locale~~ |
+| 2.2 | ~~`fct_tension_reseau_region`~~ — **fait** (10 oct.) : couverture sur 12 mois glissants, rang de dépendance, contraintes d'évacuation | ~~Les régions se classent par tension~~ |
+| 2.3 | ~~Seuils de raccordement~~ — **fait** (10 oct.) : seed `seuils_raccordement` (BT, HTA, zone grise 20–40 MW, HTB) | ~~Une puissance de projet renvoie le gestionnaire et le niveau de tension~~ |
 | 2.4 | `fct_mix_regional` : mix et parts bas-carbone par région, au pas 15 min | Série régionale exploitable |
-| 2.5 | `fct_diagnostic_territoire` : **une ligne par commune**, agrégeant 2.1 à 2.4 | Un seul `SELECT` produit tout le diagnostic |
-| 2.6 | `dim_limite_methodologique` : pour chaque indicateur, sa source, sa maille, sa date et ce qu'il ne dit pas | Chaque chiffre du rapport peut citer sa limite |
+| 2.5 | ~~`fct_diagnostic_territoire`~~ — **fait** (10 oct.), **une ligne par département** et non par commune : aucun jeu ouvert ne liste les 35 000 communes, et seules ~1 300 ont un site. La commune s'ajoute par jointure à la lecture | ~~Un seul `SELECT` produit tout le diagnostic~~ |
+| 2.6 | ~~Limites méthodologiques~~ — **fait** (10 oct.) : seed `limites_methodologiques` | ~~Chaque chiffre du rapport peut citer sa limite~~ |
 
 ### Lot 3 — Coût horaire d'un profil
 
@@ -68,11 +68,11 @@ dépôt, lance une commande et passe l'adresse en argument.
 
 | # | Étape | Fini quand |
 |---|---|---|
-| 4.1 | `diagnose --adresse` : géocodage puis diagnostic complet en sortie terminal | Une adresse produit un diagnostic lisible |
-| 4.2 | Options `--puissance` et `--profil` | Le diagnostic s'adapte au projet décrit |
+| 4.1 | ~~`diagnose --adresse`~~ — **fait** (10 oct.) | ~~Une adresse produit un diagnostic lisible~~ |
+| 4.2 | Options ~~`--puissance`~~ (**fait**, 10 oct.) et `--profil` | Le diagnostic s'adapte au projet décrit |
 | 4.3 | `--format pdf` / `--format md` : rapport d'implantation par adresse | Un document est produit, graphiques compris |
 | 4.4 | `--format json` / `--format csv` : sortie machine | Le diagnostic s'intègre à un autre outil |
-| 4.5 | Affichage systématique des limites méthodologiques à côté des chiffres | Aucun indicateur n'apparaît sans sa limite |
+| 4.5 | ~~Affichage systématique des limites méthodologiques~~ — **fait** en sortie terminal (10 oct.), testé | ~~Aucun indicateur n'apparaît sans sa limite~~ |
 
 ### Lot 5 — Exploitation et orchestration
 
@@ -126,11 +126,11 @@ quiconque clone le dépôt.
 | # | Étape | Pourquoi elle est dans le MVP | Effort |
 |---|---|---|---|
 | **1** | ~~Sources dbt + chargement des trois jeux territoriaux~~ — **FAIT le 9 octobre 2026** (4 appels API) | Sans elles, `--adresse` ne renvoyait que des codes administratifs. | ~~½ journée~~ |
-| **2** | Référentiel commune → département → région, et silver normalisée jointe **par code INSEE**. **À intégrer** : seules 1 523 communes ont un site industriel raccordé au transport, donc le diagnostic doit agréger au département quand la commune est vide — et le dire. | Les sources écrivent `GRAND EST` et `Grand Est` : sans normalisation, la jointure perd des lignes en silence. | ½ journée |
-| **3** | `fct_diagnostic_territoire` : une ligne par commune (pression industrielle, tension régionale, seuil de raccordement) | Le cœur du produit. Un `SELECT` par code INSEE doit suffire. | 1 journée |
-| **4** | `diagnose --adresse` : géocodage → diagnostic en sortie terminal, limites affichées | C'est le livrable visible, et la forme exacte que tu as fixée. | ½ journée |
+| **2** | ~~Référentiel commune → département → région, et silver normalisée jointe **par code INSEE**~~ — **FAIT le 10 octobre 2026**. Repli au département quand la commune n'a pas de site, signalé dans la sortie. | Les sources écrivent `GRAND EST` et `Grand Est` : sans normalisation, la jointure perd des lignes en silence. | ~~½ journée~~ |
+| **3** | ~~`fct_diagnostic_territoire`~~ — **FAIT le 10 octobre 2026**, une ligne par **département** (voir 2.5), la commune jointe à la lecture | Le cœur du produit. Un `SELECT` par code INSEE doit suffire. | ~~1 journée~~ |
+| **4** | ~~`diagnose --adresse`~~ — **FAIT le 10 octobre 2026**, avec `--puissance` et les limites affichées | C'est le livrable visible, et la forme exacte que tu as fixée. | ~~½ journée~~ |
 | **5** | Coût horaire sur **un seul** profil type, avec la grille Tempo existante | Prouve le volet prix sans attendre les quatre profils ni le TURPE détaillé. | 1 journée |
-| **6** | Tests : dbt sur les nouvelles tables, pytest sur `diagnose` | La rigueur est l'argument de vente du dépôt ; une table gold sans test l'annule. | ½ journée |
+| **6** | Tests : dbt sur les nouvelles tables, pytest sur `diagnose` — **fait pour les étapes 2 à 4** (134 tests dbt, 33 tests pytest) ; reste l'étape 5 | La rigueur est l'argument de vente du dépôt ; une table gold sans test l'annule. | ½ journée |
 | **7** | README : un exemple de diagnostic réel, de bout en bout, et le nouveau nom | Le dépôt doit se comprendre sans rien installer. | ½ journée |
 
 **Total : environ 4 à 5 jours à temps partiel.**

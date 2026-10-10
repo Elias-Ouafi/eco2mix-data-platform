@@ -45,12 +45,12 @@ d'heure, quota d'API suivi et documenté, tests sans réseau, CI sur runner nu.
 commande, l'adresse étant passée en argument :
 
 ```bash
-uv run python -m ingestion.cli diagnose --adresse "12 rue de la Paix, 69003 Lyon"
+uv run python -m ingestion.cli diagnose --adresse "20 rue de la République, 69002 Lyon" --puissance 12
 ```
 
-La commande écrit le diagnostic dans le terminal et, à la demande, produit un rapport
-(`--format pdf` ou `--format md`) en réutilisant le moteur du rapport mensuel existant. C'est
-un choix assumé : le livrable est un pipeline de données et son interface en ligne de commande,
+La commande écrit le diagnostic dans le terminal ([exemple réel](#diagnostiquer-une-adresse)).
+Le rapport PDF ou Markdown par adresse (`--format pdf` / `--format md`), qui réutilisera le
+moteur du rapport mensuel existant, est la prochaine étape. C'est un choix assumé : le livrable est un pipeline de données et son interface en ligne de commande,
 pas une vitrine web.
 
 ---
@@ -117,6 +117,7 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 | Normalisation | [`ingestion/transform.py`](ingestion/transform.py) | `date_heure` → UTC (changements d'heure gérés), schéma pyarrow, écriture Parquet bronze |
 | Warehouse | [`ingestion/warehouse.py`](ingestion/warehouse.py) | Interface `WarehouseLoader` + `DuckDBLoader` (MERGE sur `date_heure` dans `bronze`) |
 | Étapes métier | [`ingestion/pipeline.py`](ingestion/pipeline.py) | `extract` / `load` / `freshness` / `coverage`, appelables par les DAGs **et** par la CLI |
+| Diagnostic | [`ingestion/diagnostic.py`](ingestion/diagnostic.py) | Géocodage → une requête sur la couche gold → diagnostic texte, chaque chiffre suivi de sa limite |
 | Silver + gold | [`dbt/`](dbt/) | Modèles, référentiel `dim_filiere`, tests de données ([détail](dbt/README.md)) |
 | Rapport | [`reporting/`](reporting/) | Chiffres du mois (`data.py`), graphiques (`charts.py`), mise en page PDF (`pdf.py`) |
 | Orchestration | [`airflow/dags/`](airflow/dags/) | DAG horaire (temps réel), mensuel (consolidé) et rapport à la demande, pool `duckdb_writer` |
@@ -132,7 +133,7 @@ load_*, dbt_build, contrôles et rapport passent par le pool duckdb_writer (1 sl
 | **Parquet** (pyarrow) | Zone bronze immuable, partitionnée par date d'ingestion | Format colonne typé, lisible par DuckDB aujourd'hui et par BigQuery demain |
 | **httpx** + **tenacity** | Appels HTTP, retry exponentiel, timeouts | `tenacity` évite d'écrire une boucle de retry à la main |
 | **pydantic-settings** | Configuration typée depuis l'environnement | Valide les réglages au démarrage plutôt qu'au premier appel |
-| **pytest** + **pytest-httpx** | 126 tests, aucun appel réseau réel | L'interception au niveau du transport garantit qu'aucun test ne sort |
+| **pytest** + **pytest-httpx** | 161 tests, aucun appel réseau réel | L'interception au niveau du transport garantit qu'aucun test ne sort |
 | **ruff** | Lint et format | Un seul outil pour les deux |
 | **matplotlib** + **reportlab** | Graphiques et PDF du rapport | Importés paresseusement : ils ne pèsent que sur la commande de rapport |
 
@@ -152,7 +153,7 @@ reste transposable à un moteur Spark sans réécriture du modèle si les volume
 
 ## État d'avancement
 
-*Mis à jour le 9 octobre 2026 — réorientation du projet vers le diagnostic d'implantation
+*Mis à jour le 10 octobre 2026 — diagnostic par adresse opérationnel. Le 9 octobre : réorientation du projet vers le diagnostic d'implantation
 (voir le [cadrage produit](docs/cadrage-besoins-entreprises.md), § 7 « Décision »).*
 
 **Objectif du MVP** : une adresse française en entrée, un diagnostic de contexte électrique et
@@ -163,12 +164,13 @@ un coût horaire de profil en sortie, produits par un pipeline qui tourne sans i
 | Brique | Vérifié par |
 |---|---|
 | Ingestion éCO2mix (temps réel, consolidé/définitif) : API ODRÉ → Parquet → DuckDB | Tests sans réseau ; exécutée contre l'API réelle |
-| Architecture médaillon : bronze (Python), silver et gold (dbt-duckdb) | 56 tests de données dbt, verts sur les données réelles |
+| Architecture médaillon : bronze (Python), silver et gold (dbt-duckdb) | 134 tests de données dbt, verts sur les données réelles |
 | Historique complet 2012 → aujourd'hui (2 appels API) | Série continue, bilans annuels conformes aux chiffres publiés par RTE |
 | Calendrier Tempo (API RTE, OAuth2) et grille tarifaire | Tests sur réponses simulées |
 | Rapport mensuel PDF et Markdown (`report --format pdf/md`) | Tests de bout en bout ; généré sur septembre 2026 réel, sans prix |
 | Trois DAGs Airflow (horaire, consolidation mensuelle, rapport à la demande) | Import et structure vérifiés en CI (Airflow 2.10) |
-| Qualité | 91 tests pytest, ruff, CI GitHub Actions verte |
+| **Diagnostic par adresse** (`diagnose --adresse --puissance`) : pression industrielle, tension régionale, seuil de raccordement, limites | 33 tests ; exécuté sur des adresses réelles (Lyon, Fos-sur-Mer, Ajaccio) |
+| Qualité | 161 tests pytest, ruff, CI GitHub Actions verte |
 
 ### Pas encore validé en conditions réelles
 
@@ -188,7 +190,7 @@ Le socle technique est réutilisé tel quel ; ce qui change est le périmètre f
 | 1 | Lancer la stack Airflow (`astro dev start`) | Le DAG horaire est vert plusieurs heures de suite et le DAG rapport produit un document depuis l'UI |
 | 2 | **Ingérer les jeux territoriaux** — *fait pour les trois jeux du MVP* (9 oct.) : sources dbt déclarées, 17 656 lignes IRIS (2012→2023), 1 872 équilibres régionaux, 12 relevés de contraintes, 74 tests dbt verts. *Reporté hors MVP* : `eco2mix-regional-cons-def` (2,86 M lignes) | Les jeux du MVP sont en bronze, testés |
 | 3 | ~~**Géocodage d'adresse**~~ — **fait** (9 octobre 2026) : `ingestion/geocode.py`, commande `geocode --adresse`, 17 tests, vérifié contre la BAN réelle | ~~Une adresse résout son territoire, hors ligne en test~~ |
-| 4 | **Gold : table de diagnostic par territoire** (pression industrielle, tension réseau régionale, mix et intensité carbone, seuil de raccordement Enedis/RTE) | Une requête par code INSEE renvoie le diagnostic complet |
+| 4 | ~~**Gold : table de diagnostic par territoire**~~ — **fait** (10 octobre 2026) : référentiel commune → département → région, `fct_diagnostic_territoire` (une ligne par département, la commune en complément), seuils de raccordement, limites méthodologiques ; commande `diagnose`. *Mix régional* reporté avec `eco2mix-regional-cons-def` | ~~Une requête par code INSEE renvoie le diagnostic complet~~ |
 | 5 | **Coût horaire sur profil** : profils de consommation types, grille Tempo et TURPE vérifiées sur sources officielles | Un profil donné est chiffré créneau par créneau, avec le gain d'un décalage |
 | 6 | **Rapport d'implantation par adresse** (reprend le moteur du rapport mensuel) | Un PDF est produit pour une adresse saisie, limites méthodologiques affichées |
 | 7 | Fiabilité : alerte en cas d'échec d'une tâche, `main` protégée (CI obligatoire) | Un échec simulé déclenche l'alerte |
@@ -306,6 +308,50 @@ nom normalisé, sans accent ni casse, parce que les deux sources n'écrivent pas
 Le score et la précision sont affichés et journalisés : dans l'exemple ci-dessus, « rue de la
 Paix » n'existe pas à Lyon 3e et la BAN a retenu la voie la plus proche, avec un score de 0,63.
 C'est exactement le genre d'approximation qu'un diagnostic doit montrer plutôt que masquer.
+
+### Diagnostiquer une adresse
+
+```bash
+uv run dbt build --project-dir dbt --profiles-dir dbt   # une fois, après chargement des jeux
+uv run python -m ingestion.cli diagnose --adresse "20 rue de la République, 69002 Lyon" --puissance 12
+```
+
+Sortie réelle, le 10 octobre 2026 :
+
+```
+DIAGNOSTIC D'IMPLANTATION — 20 Rue de la République 69002 Lyon
+Commune Lyon (69123) · Rhône (69) · Auvergne-Rhône-Alpes (84)
+
+1. Pression industrielle locale (sites raccordés au réseau de transport, 2021)
+   Commune     : 1 site(s), 49,6 GWh/an
+   Département : 23 site(s) dans 19 commune(s), 1 309 GWh/an — rang 11 sur 90 départements
+   ↳ Limite : Ne compte que les sites raccordés au réseau de transport (HTB) : les consommateurs raccordés à Enedis n'y figurent pas. Depuis 2022, environ 40 % des IRIS sont masqués par le secret statistique : le millésime retenu est donc le dernier publié en entier, au prix de quelques années d'ancienneté.
+
+2. Tension du réseau régional (01/2025 – 12/2025, 12 mois)
+   Production 119 231 GWh, consommation 62 405 GWh : couverture 191 % → région excédentaire
+   Rang de dépendance : 10 sur 13 (1 = la plus déficitaire)
+   ↳ Limite : Le réseau est interconnecté : une région déficitaire importe sans difficulté de ses voisines. Le solde décrit une dépendance structurelle, pas une pénurie ni un risque de coupure.
+   Contraintes d'évacuation (RTE) : 14 575 MW d'EnR installés ou en projet, 187 MW à compenser, 2 777 MWh non évacués par an
+   ↳ Limite : Contraintes d'évacuation de la production renouvelable (injection), données à titre indicatif par RTE. Elles ne mesurent pas la capacité disponible pour un consommateur (soutirage). Pas de donnée pour la Corse ni l'outre-mer.
+
+3. Raccordement
+   Puissance 12 MW → HTA, Enedis (ou ELD) : Raccordement en moyenne tension (20 kV), souvent sur un départ dédié au-delà de quelques MW
+   ↳ Limite : Indicatif : 1 kVA est assimilé à 1 kW. Le domaine de tension réel est fixé par le gestionnaire lors de l'étude de raccordement.
+   ↳ Limite : La capacité de raccordement disponible pour la consommation n'est pas publiée en open data (Caparéseau ne couvre que l'injection). Seule une étude de raccordement RTE ou Enedis fait foi.
+```
+
+Ce que la sortie fait, et pourquoi :
+
+- **Commune, puis département.** Seules ~1 300 communes ont un site raccordé au transport ;
+  ailleurs, le diagnostic le dit et se replie sur le département, la plus fine maille
+  renseignée partout. Lyon 2e (`69382`) est ramené à Lyon (`69123`), code sous lequel ODRÉ
+  publie Paris, Lyon et Marseille.
+- **Millésime 2021, pas 2023.** Depuis 2022, ~40 % des IRIS sont masqués par le secret
+  statistique : sur 2023, le Nord tomberait de 8,7 à 2,3 TWh et la Savoie de 3,8 à 0,9 TWh. Le
+  millésime retenu est le dernier publié en entier, calculé par dbt, pas codé en dur.
+- **Pas de chiffre sans sa limite.** Chaque bloc est suivi de la limite lue dans
+  `gold.limites_methodologiques`, et la capacité de raccordement, absente de l'open data,
+  renvoie toujours vers l'étude RTE ou Enedis.
 
 ---
 
@@ -514,10 +560,11 @@ uv run pytest
 | [`test_pipeline.py`](ingestion/tests/test_pipeline.py) | Bout-en-bout API simulée → Parquet → DuckDB, contrôles de fraîcheur et de complétude |
 | [`test_extract_rte.py`](ingestion/tests/test_extract_rte.py) | Jeton OAuth (Basic, réutilisé), découpage des plages, dates futures, retry, couleurs inconnues |
 | [`test_report.py`](ingestion/tests/test_report.py) | Épisodes de pic, meilleur créneau bleu HC, économie estimée, repli sans prix, PDF et Markdown écrits (graphiques, liens relatifs, version texte seul) |
+| [`test_diagnostic.py`](ingestion/tests/test_diagnostic.py) | Codes IRIS tronqués et doublons vides, communes reconstituées, arrondissements, Corse, millésime sans secret, fenêtre de 12 mois, seuils de raccordement aux bornes, limites toutes affichées, commande `diagnose` de bout en bout |
 | [`test_dbt.py`](ingestion/tests/test_dbt.py) | `dbt build` de bronze à gold : lignes vides écartées, bascule consolidé → temps réel sans double comptage, jour de 25 h, premier run sans consolidé |
 
-Les 56 tests de données dbt (unicité, valeurs admises, bornes, intégrité référentielle, absence
-de chevauchement entre mesures) tournent à chaque `dbt build`, donc à chaque run des DAGs.
+Les 134 tests de données dbt (unicité, valeurs admises, bornes, intégrité référentielle, absence
+de chevauchement entre mesures, hiérarchie territoriale conforme aux codes publiés) tournent à chaque `dbt build`, donc à chaque run des DAGs.
 
 **Aucun test n'appelle l'API réelle** : `pytest-httpx` intercepte au niveau du transport, et un
 test condamne explicitement les sockets pour le prouver. DuckDB tourne en mémoire.

@@ -1,0 +1,6 @@
+ordre,domaine_tension,puissance_min_mw,puissance_max_mw,gestionnaire,commentaire
+1,BT ≤ 36 kVA,0,0.036,Enedis (ou ELD),Branchement basse tension standard
+2,BT > 36 kVA,0.036,0.25,Enedis (ou ELD),Basse tension jusqu'à 250 kVA
+3,HTA,0.25,20,Enedis (ou ELD),"Raccordement en moyenne tension (20 kV), souvent sur un départ dédié au-delà de quelques MW"
+4,HTA – zone grise,20,40,Enedis ou RTE,"Encore du ressort d'Enedis en HTA, mais un raccordement HTB par RTE est probable si le poste source local est saturé"
+5,HTB,40,,RTE,Raccordement au réseau public de transport (63 kV et plus) : délais annoncés de 2 à 7 ans
